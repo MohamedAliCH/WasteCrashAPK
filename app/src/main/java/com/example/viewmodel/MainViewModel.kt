@@ -70,6 +70,39 @@ class MainViewModel(
         }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), UiState.Loading)
 
+    val clansState: StateFlow<List<EcoClan>> = repository.observeClans()
+    val joinedClanId: StateFlow<String?> = repository.observeJoinedClanId()
+
+    fun joinClan(clanId: String, profile: UserProfile) {
+        repository.joinClan(clanId, profile)
+        val clan = clansState.value.firstOrNull { it.id == clanId }
+        _statusBanner.value = if (clan != null) "Joined ${clan.name} [${clan.tag}]!" else "Joined Eco-Clan!"
+    }
+
+    fun leaveClan(profile: UserProfile) {
+        repository.leaveClan(profile)
+        _statusBanner.value = "Left Eco-Clan."
+    }
+
+    fun createClan(
+        name: String,
+        tag: String,
+        region: String,
+        motto: String,
+        profile: UserProfile
+    ) {
+        val created = repository.createClan(name, tag, region, motto, profile)
+        _statusBanner.value = "Created ${created.name} [${created.tag}]!"
+    }
+
+    fun sendClanMessage(text: String, profile: UserProfile) {
+        repository.sendClanMessage(text, profile)
+    }
+
+    fun showBanner(message: String) {
+        _statusBanner.value = message
+    }
+
     fun clearBanner() {
         _statusBanner.value = null
     }

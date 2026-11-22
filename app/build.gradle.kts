@@ -42,6 +42,8 @@ android {
 
   buildTypes {
     release {
+      // Release builds use Firebase (anonymous auth + online 1v1).
+      buildConfigField("boolean", "LOCAL_TEST_MODE", "false")
       isCrunchPngs = false
       isMinifyEnabled = false
       proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
@@ -50,6 +52,9 @@ android {
       signingConfig = signingConfigs.getByName("release")
     }
     debug {
+      // Debug builds run fully offline as a local guest: no sign-in, AI rivals, local saves.
+      // Set to "false" to test Firebase online play from a debug build.
+      buildConfigField("boolean", "LOCAL_TEST_MODE", "true")
       // Do not remove or modify this signingConfig assignment. It is necessary for Android apps in
       // AI Studio.
       signingConfig = signingConfigs.getByName("debugConfig")

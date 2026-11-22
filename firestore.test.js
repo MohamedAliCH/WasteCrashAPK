@@ -130,6 +130,11 @@ test("Users collection: owner create/read/partial update succeeds, cross-user & 
   await assertFails(bobDb.collection("users").doc(ALICE_UID).get());
   await assertFails(bobDb.collection("users").doc(ALICE_UID).update({ ecoCoins: 999999, updatedAt: pastTime(500) }));
 
+  // Economy jumps beyond one match / quest are blocked
+  await assertFails(aliceDb.collection("users").doc(ALICE_UID).update({ ecoCoins: 999999, updatedAt: pastTime(400) }));
+  await assertFails(aliceDb.collection("users").doc(ALICE_UID).update({ trophies: 5000, updatedAt: pastTime(400) }));
+  await assertFails(aliceDb.collection("users").doc(ALICE_UID).update({ wins: 40, updatedAt: pastTime(400) }));
+
   // Immutable field & ghost field blocked
   await assertFails(aliceDb.collection("users").doc(ALICE_UID).update({ friendCode: "HACK99", updatedAt: pastTime(500) }));
   await assertFails(aliceDb.collection("users").doc(ALICE_UID).update({ isAdmin: true, updatedAt: pastTime(500) }));
@@ -140,18 +145,21 @@ test("PublicProfiles: filtered query succeeds, unfiltered fails, owner-only writ
   const aliceDb = testEnv.authenticatedContext(ALICE_UID).firestore();
   const bobDb = testEnv.authenticatedContext(BOB_UID).firestore();
 
+  await assertSucceeds(aliceDb.collection("users").doc(ALICE_UID).set(validUserProfile(ALICE_UID)));
   const pub = {
     userId: ALICE_UID,
     displayName: "AliceTN",
     friendCode: "TN2026",
-    trophies: 210,
+    trophies: 120,
     arenaId: 0,
-    wins: 5,
+    wins: 4,
     equippedDeckIds: ["boss_b1", "boss_b2", "boss_b3"],
     publicVisible: true,
     updatedAt: pastTime(),
   };
 
+  // Public numbers must mirror the private profile
+  await assertFails(aliceDb.collection("publicProfiles").doc(ALICE_UID).set({ ...pub, trophies: 9999 }));
   await assertSucceeds(aliceDb.collection("publicProfiles").doc(ALICE_UID).set(pub));
   await assertFails(bobDb.collection("publicProfiles").doc(ALICE_UID).update({ trophies: 9999, updatedAt: pastTime(1000) }));
   await assertSucceeds(bobDb.collection("publicProfiles").where("publicVisible", "==", true).where("friendCode", "==", "TN2026").get());
@@ -181,14 +189,24 @@ test("MatchmakingQueue: owner creates, opponent matches SEARCHING ticket, unfilt
   await assertSucceeds(bobDb.collection("matchmakingQueue").where("status", "==", "SEARCHING").get());
   await assertFails(bobDb.collection("matchmakingQueue").get());
 
-  // Opponent claims SEARCHING ticket
-  await assertSucceeds(
+  // A bare claim (no live match created with it) is rejected
+  await assertFails(
     bobDb.collection("matchmakingQueue").doc(ALICE_UID).update({
       status: "MATCHED",
-      matchId: "match_123",
+      matchId: "match_ghost",
       updatedAt: pastTime(1000),
     })
   );
+
+  // Opponent claims SEARCHING ticket atomically with the live match that contains both players
+  const batch = bobDb.batch();
+  batch.set(bobDb.collection("liveMatches").doc("match_123"), validLiveMatch(BOB_UID, ALICE_UID));
+  batch.update(bobDb.collection("matchmakingQueue").doc(ALICE_UID), {
+    status: "MATCHED",
+    matchId: "match_123",
+    updatedAt: pastTime(1000),
+  });
+  await assertSucceeds(batch.commit());
 
   // Cannot re-claim MATCHED ticket
   await assertFails(
@@ -214,6 +232,23 @@ test("LiveMatches: participants stream state, spectators read & update spectator
   // Spectator can update spectatorCount only, NOT gameplay state
   await assertSucceeds(specDb.collection("liveMatches").doc("match_1").update({ spectatorCount: 2 }));
   await assertFails(specDb.collection("liveMatches").doc("match_1").update({ winnerUid: SPECTATOR_UID, updatedAt: pastTime(500) }));
+
+  // A participant cannot overwrite the opponent's state or crown an outsider
+  await assertFails(
+    bobDb.collection("liveMatches").doc("match_1").update({
+      player1: { ...validPlayerLiveState(ALICE_UID, "Alice"), bossHp: 1500, totalDamage: 0 },
+      updatedAt: pastTime(600),
+    })
+  );
+  await assertFails(
+    bobDb.collection("liveMatches").doc("match_1").update({
+      status: "FINISHED",
+      winnerUid: SPECTATOR_UID,
+      updatedAt: pastTime(600),
+    })
+  );
+  // Spectator count may only move by one
+  await assertFails(specDb.collection("liveMatches").doc("match_1").update({ spectatorCount: 500 }));
 
   // Participant can finish match, then terminal state locks further updates
   await assertSucceeds(

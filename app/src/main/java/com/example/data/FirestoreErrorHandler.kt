@@ -25,17 +25,14 @@ fun handleFirestoreError(exception: Throwable, operationType: OperationType, pat
     val auth = FirebaseAuth.getInstance()
     val currentUser = auth.currentUser
 
+    // No e-mail addresses in logs (PII): provider ids only.
     val providerInfoList = currentUser?.providerData?.map { provider ->
-        JSONObject().apply {
-            put("providerId", provider.providerId)
-            put("email", provider.email)
-        }
+        JSONObject().apply { put("providerId", provider.providerId) }
     } ?: emptyList()
 
     val authInfoJson = JSONObject().apply {
         put("userId", currentUser?.uid)
-        put("email", currentUser?.email)
-        put("emailVerified", currentUser?.isEmailVerified)
+        put("isAnonymous", currentUser?.isAnonymous)
         put("tenantId", currentUser?.tenantId)
         put("providerInfo", JSONArray(providerInfoList))
     }

@@ -1,6 +1,7 @@
 package com.example.data
 
 import android.content.Context
+import com.example.BuildConfig
 import com.example.R
 import com.example.engine.Match3Engine
 import com.example.engine.MatchTelemetry
@@ -14,11 +15,16 @@ import com.google.firebase.firestore.FirebaseFirestoreException
 import com.google.firebase.firestore.snapshots
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.tasks.await
+import org.json.JSONArray
+import org.json.JSONObject
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -38,23 +44,392 @@ data class QuestClaimOutcome(
     val cardsAwarded: Int
 )
 
-class WasteCrushRepository(private val db: FirebaseFirestore) {
+class WasteCrushRepository(
+    private val db: FirebaseFirestore,
+    private val appContext: Context? = null
+) {
 
     constructor(context: Context) : this(
         FirebaseFirestore.getInstance(
             context.applicationContext.getString(R.string.firestore_database_id)
-        )
+        ),
+        context.applicationContext
     )
+
+    companion object {
+        private val guestProfileState = MutableStateFlow<UserProfile?>(null)
+        private val clansFlow = MutableStateFlow(ClanCatalog.defaultClans)
+        private val joinedClanIdFlow = MutableStateFlow<String?>(null)
+        private var socialPrefsInitialized = false
+        private const val SOCIAL_PREFS_NAME = "wastecrush_social"
+        private const val KEY_JOINED_CLAN = "joined_clan_id"
+        private const val KEY_CUSTOM_CLANS = "custom_clans_json"
+        private const val KEY_CLAN_CHATS = "clan_chats_json"
+        private const val GUEST_PREFS_NAME = "wastecrush_guest"
+        private const val KEY_GUEST_PROFILE = "guest_profile_json"
+        const val GUEST_UID = "guest_local"
+        /** Replays recorded in offline guest mode (kept for this app session). */
+        private val localReplays = java.util.concurrent.ConcurrentHashMap<String, MatchReplay>()
+    }
+
+    init {
+        initSocialPrefsIfNeeded()
+    }
+
+    private fun socialPrefs() =
+        appContext?.getSharedPreferences(SOCIAL_PREFS_NAME, Context.MODE_PRIVATE)
+
+    private fun initSocialPrefsIfNeeded() {
+        val prefs = socialPrefs() ?: return
+        if (socialPrefsInitialized) return
+        socialPrefsInitialized = true
+
+        val savedJoinedId = prefs.getString(KEY_JOINED_CLAN, null)
+        val customClansJson = prefs.getString(KEY_CUSTOM_CLANS, null)
+        val chatsJson = prefs.getString(KEY_CLAN_CHATS, null)
+
+        var mergedClans = ClanCatalog.defaultClans.toMutableList()
+        if (!customClansJson.isNullOrBlank()) {
+            try {
+                val arr = JSONArray(customClansJson)
+                for (i in 0 until arr.length()) {
+                    val obj = arr.getJSONObject(i)
+                    val custom = EcoClan(
+                        id = obj.getString("id"),
+                        name = obj.getString("name"),
+                        tag = obj.getString("tag"),
+                        region = obj.getString("region"),
+                        motto = obj.getString("motto"),
+                        badgeColorHex = obj.optLong("badgeColorHex", 0xFF3CB4FF),
+                        minTrophies = obj.optInt("minTrophies", 0),
+                        weeklyCleanPoints = obj.optInt("weeklyCleanPoints", 120),
+                        weeklyGoalPoints = obj.optInt("weeklyGoalPoints", 5000),
+                        members = emptyList(),
+                        chatMessages = emptyList()
+                    )
+                    if (mergedClans.none { it.id == custom.id }) {
+                        mergedClans.add(0, custom)
+                    }
+                }
+            } catch (_: Exception) {
+            }
+        }
+
+        if (!chatsJson.isNullOrBlank()) {
+            try {
+                val chatObj = JSONObject(chatsJson)
+                mergedClans = mergedClans.map { clan ->
+                    val msgArr = chatObj.optJSONArray(clan.id) ?: return@map clan
+                    val extraMessages = buildList {
+                        for (i in 0 until msgArr.length()) {
+                            val m = msgArr.getJSONObject(i)
+                            add(
+                                ClanMessage(
+                                    id = m.getString("id"),
+                                    senderName = m.getString("senderName"),
+                                    senderRole = m.optString("senderRole", "Member"),
+                                    text = m.getString("text"),
+                                    timestampLabel = m.optString("timestampLabel", "Saved"),
+                                    isMe = true
+                                )
+                            )
+                        }
+                    }
+                    clan.copy(chatMessages = clan.chatMessages + extraMessages)
+                }.toMutableList()
+            } catch (_: Exception) {
+            }
+        }
+
+        clansFlow.value = mergedClans
+        joinedClanIdFlow.value = savedJoinedId
+    }
+
+    fun observeClans(): StateFlow<List<EcoClan>> = clansFlow.asStateFlow()
+
+    fun observeJoinedClanId(): StateFlow<String?> = joinedClanIdFlow.asStateFlow()
+
+    fun joinClan(clanId: String, profile: UserProfile) {
+        val currentMember = ClanMember(
+            name = profile.displayName,
+            role = "Member",
+            trophies = profile.trophies,
+            friendCode = profile.friendCode,
+            leadBossId = profile.equippedDeckIds.firstOrNull() ?: "boss_b1",
+            isCurrentUser = true
+        )
+        clansFlow.value = clansFlow.value.map { clan ->
+            val withoutMe = clan.members.filterNot { it.isCurrentUser || it.friendCode == profile.friendCode }
+            if (clan.id == clanId) {
+                clan.copy(members = listOf(currentMember) + withoutMe)
+            } else {
+                clan.copy(members = withoutMe)
+            }
+        }
+        joinedClanIdFlow.value = clanId
+        socialPrefs()?.edit()?.putString(KEY_JOINED_CLAN, clanId)?.apply()
+    }
+
+    fun leaveClan(profile: UserProfile) {
+        clansFlow.value = clansFlow.value.map { clan ->
+            clan.copy(members = clan.members.filterNot { it.isCurrentUser || it.friendCode == profile.friendCode })
+        }
+        joinedClanIdFlow.value = null
+        socialPrefs()?.edit()?.remove(KEY_JOINED_CLAN)?.apply()
+    }
+
+    fun createClan(
+        name: String,
+        tag: String,
+        region: String,
+        motto: String,
+        profile: UserProfile
+    ): EcoClan {
+        val cleanName = name.trim().take(28).ifBlank { "${profile.displayName}'s Clan" }
+        val cleanTag = tag.trim().uppercase().filter { it.isLetterOrDigit() }.take(4).ifBlank { "ECO" }
+        val cleanRegion = region.trim().ifBlank { "Tunisia" }
+        val cleanMotto = motto.trim().take(80).ifBlank { "Purifying Tunisia together, one Match-3 combo at a time." }
+        val clanId = "clan_custom_${System.currentTimeMillis()}"
+
+        val founder = ClanMember(
+            name = profile.displayName,
+            role = "Leader",
+            trophies = profile.trophies,
+            friendCode = profile.friendCode,
+            leadBossId = profile.equippedDeckIds.firstOrNull() ?: "boss_b1",
+            isCurrentUser = true
+        )
+        val newClan = EcoClan(
+            id = clanId,
+            name = cleanName,
+            tag = cleanTag,
+            region = cleanRegion,
+            motto = cleanMotto,
+            badgeColorHex = 0xFF18B85B,
+            minTrophies = 0,
+            weeklyCleanPoints = 150,
+            weeklyGoalPoints = 5000,
+            members = listOf(founder),
+            chatMessages = listOf(
+                ClanMessage(
+                    id = "welcome_$clanId",
+                    senderName = profile.displayName,
+                    senderRole = "Leader",
+                    text = "Welcome to $cleanName [$cleanTag]! Let's purify $cleanRegion!",
+                    timestampLabel = "Just now",
+                    isMe = true
+                )
+            )
+        )
+
+        clansFlow.value = listOf(newClan) + clansFlow.value.map { clan ->
+            clan.copy(members = clan.members.filterNot { it.isCurrentUser || it.friendCode == profile.friendCode })
+        }
+        joinedClanIdFlow.value = clanId
+        persistCustomClansAndJoined(clanId)
+        return newClan
+    }
+
+    fun sendClanMessage(text: String, profile: UserProfile) {
+        val clean = text.trim()
+        val activeId = joinedClanIdFlow.value ?: return
+        if (clean.isBlank()) return
+        val activeClan = clansFlow.value.firstOrNull { it.id == activeId }
+        val myRole = activeClan?.members?.firstOrNull { it.isCurrentUser || it.friendCode == profile.friendCode }?.role ?: "Member"
+        val newMsg = ClanMessage(
+            id = "msg_${System.currentTimeMillis()}",
+            senderName = profile.displayName,
+            senderRole = myRole,
+            text = clean.take(180),
+            timestampLabel = "Now",
+            isMe = true
+        )
+        clansFlow.value = clansFlow.value.map { clan ->
+            if (clan.id == activeId) clan.copy(chatMessages = clan.chatMessages + newMsg) else clan
+        }
+        persistUserMessage(activeId, newMsg)
+    }
+
+    private fun persistCustomClansAndJoined(joinedId: String) {
+        val prefs = socialPrefs() ?: return
+        val customArr = JSONArray()
+        clansFlow.value.filter { it.id.startsWith("clan_custom_") }.forEach { clan ->
+            customArr.put(
+                JSONObject().apply {
+                    put("id", clan.id)
+                    put("name", clan.name)
+                    put("tag", clan.tag)
+                    put("region", clan.region)
+                    put("motto", clan.motto)
+                    put("badgeColorHex", clan.badgeColorHex)
+                    put("minTrophies", clan.minTrophies)
+                    put("weeklyCleanPoints", clan.weeklyCleanPoints)
+                    put("weeklyGoalPoints", clan.weeklyGoalPoints)
+                }
+            )
+        }
+        prefs.edit()
+            .putString(KEY_JOINED_CLAN, joinedId)
+            .putString(KEY_CUSTOM_CLANS, customArr.toString())
+            .apply()
+    }
+
+    private fun persistUserMessage(clanId: String, message: ClanMessage) {
+        val prefs = socialPrefs() ?: return
+        val existingJson = prefs.getString(KEY_CLAN_CHATS, null)
+        val root = if (existingJson.isNullOrBlank()) JSONObject() else try {
+            JSONObject(existingJson)
+        } catch (_: Exception) {
+            JSONObject()
+        }
+        val arr = root.optJSONArray(clanId) ?: JSONArray()
+        arr.put(
+            JSONObject().apply {
+                put("id", message.id)
+                put("senderName", message.senderName)
+                put("senderRole", message.senderRole)
+                put("text", message.text)
+                put("timestampLabel", message.timestampLabel)
+            }
+        )
+        root.put(clanId, arr)
+        prefs.edit().putString(KEY_CLAN_CHATS, root.toString()).apply()
+    }
 
     private val auth = Firebase.auth
 
     private fun requireUserId(): String {
         return auth.currentUser?.uid?.takeIf { it.isNotBlank() }
-            ?: throw IllegalStateException("User must be signed in with Google before accessing Firestore.")
+            ?: throw IllegalStateException("User must be signed in before accessing Firestore.")
+    }
+
+    /**
+     * Local guest mode: no sign-in, no network. Always on when BuildConfig.LOCAL_TEST_MODE is true
+     * (debug builds), otherwise used as a fallback when Firebase auth is unavailable.
+     */
+    fun isGuestMode(): Boolean = BuildConfig.LOCAL_TEST_MODE || auth.currentUser == null
+
+    private fun buildStarterProfile(uid: String, displayName: String, today: String): UserProfile {
+        return UserProfile(
+            id = uid,
+            userId = uid,
+            displayName = displayName,
+            friendCode = generateFriendCode(uid),
+            trophies = 0,
+            ecoCoins = 250,
+            wins = 0,
+            losses = 0,
+            equippedDeckIds = listOf("boss_b1", "boss_b2", "boss_b3"),
+            bossLevels = mapOf(
+                "boss_b1" to 1,
+                "boss_b2" to 1,
+                "boss_b3" to 1,
+                "boss_b4" to 1
+            ),
+            bossCopies = mapOf(
+                "boss_b1" to 3,
+                "boss_b2" to 2,
+                "boss_b3" to 1,
+                "boss_b4" to 0
+            ),
+            friendUids = emptyList(),
+            dailyQuestSeedDate = today,
+            questProgress = emptyMap(),
+            questClaimed = emptyMap()
+        )
+    }
+
+    // --- Guest profile (persisted in SharedPreferences so local testing keeps progress) ---
+
+    private fun guestPrefs() = appContext?.getSharedPreferences(GUEST_PREFS_NAME, Context.MODE_PRIVATE)
+
+    private fun ensureGuestProfile(): UserProfile {
+        val existing = guestProfileState.value
+        if (existing != null) return existing
+        val today = todayDateKey()
+        val loaded = guestPrefs()?.getString(KEY_GUEST_PROFILE, null)?.let { decodeGuestProfile(it) }
+        val created = loaded ?: buildStarterProfile(GUEST_UID, "Tunisia Guest", today)
+        val refreshed = resetDailyQuestsIfNeeded(created, today)
+        saveGuest(refreshed)
+        return refreshed
+    }
+
+    private fun saveGuest(profile: UserProfile) {
+        guestProfileState.value = profile
+        guestPrefs()?.edit()?.putString(KEY_GUEST_PROFILE, encodeGuestProfile(profile))?.apply()
+    }
+
+    /** Wipes local guest progress (debug/testing helper). */
+    fun resetGuestProfile() {
+        guestPrefs()?.edit()?.remove(KEY_GUEST_PROFILE)?.apply()
+        guestProfileState.value = null
+        ensureGuestProfile()
+    }
+
+    private fun encodeGuestProfile(p: UserProfile): String = JSONObject().apply {
+        put("userId", p.userId)
+        put("displayName", p.displayName)
+        put("friendCode", p.friendCode)
+        put("trophies", p.trophies)
+        put("ecoCoins", p.ecoCoins)
+        put("wins", p.wins)
+        put("losses", p.losses)
+        put("equippedDeckIds", JSONArray(p.equippedDeckIds))
+        put("bossLevels", JSONObject(p.bossLevels as Map<*, *>))
+        put("bossCopies", JSONObject(p.bossCopies as Map<*, *>))
+        put("friendUids", JSONArray(p.friendUids))
+        put("dailyQuestSeedDate", p.dailyQuestSeedDate)
+        put("questProgress", JSONObject(p.questProgress as Map<*, *>))
+        put("questClaimed", JSONObject(p.questClaimed as Map<*, *>))
+    }.toString()
+
+    private fun decodeGuestProfile(json: String): UserProfile? = try {
+        val o = JSONObject(json)
+        fun strList(key: String): List<String> {
+            val a = o.optJSONArray(key) ?: return emptyList()
+            return List(a.length()) { a.getString(it) }
+        }
+        fun intMap(key: String): Map<String, Int> {
+            val m = o.optJSONObject(key) ?: return emptyMap()
+            return m.keys().asSequence().associateWith { m.optInt(it) }
+        }
+        fun boolMap(key: String): Map<String, Boolean> {
+            val m = o.optJSONObject(key) ?: return emptyMap()
+            return m.keys().asSequence().associateWith { m.optBoolean(it) }
+        }
+        UserProfile(
+            id = GUEST_UID,
+            userId = GUEST_UID,
+            displayName = o.optString("displayName", "Tunisia Guest"),
+            friendCode = o.optString("friendCode", generateFriendCode(GUEST_UID)),
+            trophies = o.optInt("trophies"),
+            ecoCoins = o.optInt("ecoCoins", 250),
+            wins = o.optInt("wins"),
+            losses = o.optInt("losses"),
+            equippedDeckIds = strList("equippedDeckIds").ifEmpty { listOf("boss_b1", "boss_b2", "boss_b3") },
+            bossLevels = intMap("bossLevels"),
+            bossCopies = intMap("bossCopies"),
+            friendUids = strList("friendUids"),
+            dailyQuestSeedDate = o.optString("dailyQuestSeedDate", todayDateKey()),
+            questProgress = intMap("questProgress"),
+            questClaimed = boolMap("questClaimed")
+        )
+    } catch (_: Exception) {
+        null
     }
 
     private fun todayDateKey(): String {
         return SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date())
+    }
+
+    private fun resetDailyQuestsIfNeeded(profile: UserProfile, today: String): UserProfile {
+        if (profile.dailyQuestSeedDate == today) return profile
+        val dailyIds = GameCatalog.quests.filter { it.category == QuestCategory.DAILY }.map { it.id }.toSet()
+        return profile.copy(
+            dailyQuestSeedDate = today,
+            questProgress = profile.questProgress.filterKeys { it !in dailyIds },
+            questClaimed = profile.questClaimed.filterKeys { it !in dailyIds }
+        )
     }
 
     private fun generateFriendCode(uid: String): String {
@@ -70,6 +445,9 @@ class WasteCrushRepository(private val db: FirebaseFirestore) {
     }
 
     suspend fun ensureUserProfile(): Result<UserProfile> {
+        if (isGuestMode()) {
+            return Result.success(ensureGuestProfile())
+        }
         var path = "users/unknown"
         return try {
             val uid = requireUserId()
@@ -81,60 +459,22 @@ class WasteCrushRepository(private val db: FirebaseFirestore) {
             if (snap.exists()) {
                 val existing = snap.toObject(UserProfile::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
                     ?: UserProfile(userId = uid)
-                // Reset daily quests if date rolled over
-                if (existing.dailyQuestSeedDate != today) {
-                    val dailyIds = GameCatalog.quests.filter { it.category == QuestCategory.DAILY }.map { it.id }.toSet()
-                    val newProgress = existing.questProgress.filterKeys { it !in dailyIds }
-                    val newClaimed = existing.questClaimed.filterKeys { it !in dailyIds }
+                val refreshed = resetDailyQuestsIfNeeded(existing, today)
+                if (refreshed !== existing) {
                     docRef.update(
                         mapOf(
-                            "dailyQuestSeedDate" to today,
-                            "questProgress" to newProgress,
-                            "questClaimed" to newClaimed,
+                            "dailyQuestSeedDate" to refreshed.dailyQuestSeedDate,
+                            "questProgress" to refreshed.questProgress,
+                            "questClaimed" to refreshed.questClaimed,
                             "updatedAt" to FieldValue.serverTimestamp()
                         )
                     ).await()
-                    val refreshed = existing.copy(
-                        dailyQuestSeedDate = today,
-                        questProgress = newProgress,
-                        questClaimed = newClaimed
-                    )
-                    syncPublicProfile(refreshed)
-                    Result.success(refreshed)
-                } else {
-                    syncPublicProfile(existing)
-                    Result.success(existing)
                 }
+                syncPublicProfile(refreshed)
+                Result.success(refreshed)
             } else {
                 val displayName = (user?.displayName?.takeIf { it.isNotBlank() } ?: "Tunisia Player").take(40)
-                val code = generateFriendCode(uid)
-                val starter = UserProfile(
-                    id = uid,
-                    userId = uid,
-                    displayName = displayName,
-                    friendCode = code,
-                    trophies = 0,
-                    ecoCoins = 250,
-                    wins = 0,
-                    losses = 0,
-                    equippedDeckIds = listOf("boss_b1", "boss_b2", "boss_b3"),
-                    bossLevels = mapOf(
-                        "boss_b1" to 1,
-                        "boss_b2" to 1,
-                        "boss_b3" to 1,
-                        "boss_b4" to 1
-                    ),
-                    bossCopies = mapOf(
-                        "boss_b1" to 3,
-                        "boss_b2" to 2,
-                        "boss_b3" to 1,
-                        "boss_b4" to 0
-                    ),
-                    friendUids = emptyList(),
-                    dailyQuestSeedDate = today,
-                    questProgress = emptyMap(),
-                    questClaimed = emptyMap()
-                )
+                val starter = buildStarterProfile(uid, displayName, today)
                 docRef.set(starter.toCreateMap()).await()
                 syncPublicProfile(starter)
                 Result.success(starter)
@@ -170,6 +510,11 @@ class WasteCrushRepository(private val db: FirebaseFirestore) {
     }
 
     fun observeUserProfile(): Flow<UserProfile?> = flow {
+        if (isGuestMode()) {
+            ensureGuestProfile()
+            emitAll(guestProfileState)
+            return@flow
+        }
         val uid = requireUserId()
         val path = "users/$uid"
         emitAll(
@@ -191,197 +536,113 @@ class WasteCrushRepository(private val db: FirebaseFirestore) {
         )
     }
 
-    suspend fun updateEquippedDeck(newDeckIds: List<String>): Result<Unit> {
-        val uid = auth.currentUser?.uid ?: return Result.failure(IllegalStateException("Not signed in"))
-        val path = "users/$uid"
-        return try {
-            require(newDeckIds.size == 3 && newDeckIds.distinct().size == 3) { "Eco-Deck must contain 3 distinct Bosses." }
-            db.collection("users").document(uid).update(
-                mapOf(
-                    "equippedDeckIds" to newDeckIds,
-                    "updatedAt" to FieldValue.serverTimestamp()
-                )
-            ).await()
-            db.collection("publicProfiles").document(uid).update(
-                mapOf(
-                    "equippedDeckIds" to newDeckIds,
-                    "updatedAt" to FieldValue.serverTimestamp()
-                )
-            ).await()
-            Result.success(Unit)
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            handleFirestoreError(e, OperationType.UPDATE, path)
-            Result.failure(e)
+    /**
+     * Runs [compute] on a fresh copy of the profile: guest profile in memory, or the Firestore
+     * document inside a transaction (so concurrent writes can't overwrite each other).
+     * [compute] returns the updated profile, the changed field names, and a result value.
+     */
+    private suspend fun <T> mutateProfile(
+        operation: OperationType,
+        compute: (UserProfile) -> Triple<UserProfile, List<String>, T>
+    ): Result<T> {
+        if (isGuestMode()) {
+            return try {
+                val (updated, _, value) = compute(ensureGuestProfile())
+                saveGuest(updated)
+                Result.success(value)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Result.failure(e)
+            }
         }
-    }
-
-    suspend fun upgradeBoss(profile: UserProfile, bossId: String): Result<Int> {
         val uid = auth.currentUser?.uid ?: return Result.failure(IllegalStateException("Not signed in"))
         val path = "users/$uid"
         return try {
-            val boss = GameCatalog.bossById(bossId)
-            val currentLevel = profile.bossLevels[bossId] ?: 0
-            require(currentLevel >= 1) { "Capture this Boss first to unlock upgrades." }
-            require(currentLevel < 10) { "Boss is already at maximum Level 10." }
-            val copiesNeeded = GameCatalog.copiesNeededForNextLevel(currentLevel, boss.rarity)
-            val coinsNeeded = GameCatalog.coinsNeededForNextLevel(currentLevel, boss.rarity)
-            val currentCopies = profile.bossCopies[bossId] ?: 0
-            require(currentCopies >= copiesNeeded) { "Need $copiesNeeded copies (have $currentCopies)." }
-            require(profile.ecoCoins >= coinsNeeded) { "Need $coinsNeeded Eco-Coins." }
-
-            val newLevel = currentLevel + 1
-            val updatedLevels = profile.bossLevels.toMutableMap().apply { put(bossId, newLevel) }
-            val updatedCopies = profile.bossCopies.toMutableMap().apply { put(bossId, currentCopies - copiesNeeded) }
-            val newCoins = profile.ecoCoins - coinsNeeded
-
-            db.collection("users").document(uid).update(
-                mapOf(
-                    "bossLevels" to updatedLevels,
-                    "bossCopies" to updatedCopies,
-                    "ecoCoins" to newCoins,
-                    "updatedAt" to FieldValue.serverTimestamp()
-                )
-            ).await()
-            Result.success(newLevel)
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            handleFirestoreError(e, OperationType.UPDATE, path)
-            Result.failure(e)
-        }
-    }
-
-    suspend fun applyMatchResult(
-        profile: UserProfile,
-        telemetry: MatchTelemetry
-    ): Result<MatchRewardOutcome> {
-        val uid = auth.currentUser?.uid ?: return Result.failure(IllegalStateException("Not signed in"))
-        val path = "users/$uid"
-        return try {
-            val trophyDelta = if (telemetry.won) 30 else -15
-            val newTrophies = (profile.trophies + trophyDelta).coerceAtLeast(0)
-            val coinsEarned = if (telemetry.won) 95 + telemetry.arenaId * 30 else 30 + telemetry.arenaId * 10
-            val newCoins = profile.ecoCoins + coinsEarned
-            val newWins = profile.wins + if (telemetry.won) 1 else 0
-            val newLosses = profile.losses + if (telemetry.won) 0 else 1
-
-            val updatedLevels = profile.bossLevels.toMutableMap()
-            val updatedCopies = profile.bossCopies.toMutableMap()
-            var capturedBossId: String? = null
-            if (telemetry.won) {
-                capturedBossId = telemetry.bossId
-                if ((updatedLevels[telemetry.bossId] ?: 0) == 0) {
-                    updatedLevels[telemetry.bossId] = 1
-                    updatedCopies[telemetry.bossId] = (updatedCopies[telemetry.bossId] ?: 0)
-                } else {
-                    updatedCopies[telemetry.bossId] = (updatedCopies[telemetry.bossId] ?: 0) + 1
+            val ref = db.collection("users").document(uid)
+            var updatedProfile: UserProfile? = null
+            val value = db.runTransaction { tx ->
+                val snap = tx.get(ref)
+                val current = snap.toObject(UserProfile::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
+                    ?: throw IllegalStateException("Profile not found.")
+                val (updated, fields, v) = compute(current)
+                val changes = mutableMapOf<String, Any>("updatedAt" to FieldValue.serverTimestamp())
+                for (f in fields) {
+                    changes[f] = when (f) {
+                        "trophies" -> updated.trophies
+                        "ecoCoins" -> updated.ecoCoins
+                        "wins" -> updated.wins
+                        "losses" -> updated.losses
+                        "bossLevels" -> updated.bossLevels
+                        "bossCopies" -> updated.bossCopies
+                        "questProgress" -> updated.questProgress
+                        "questClaimed" -> updated.questClaimed
+                        "equippedDeckIds" -> updated.equippedDeckIds
+                        "friendUids" -> updated.friendUids
+                        else -> throw IllegalArgumentException("Unknown field $f")
+                    }
                 }
-            }
-
-            val updatedQuests = Match3Engine.evaluateQuestUpdates(profile.questProgress, telemetry)
-            val newlyCompleted = GameCatalog.quests.filter { q ->
-                val before = profile.questProgress[q.id] ?: 0
-                val after = updatedQuests[q.id] ?: 0
-                before < q.target && after >= q.target
-            }.map { it.id }
-
-            db.collection("users").document(uid).update(
-                mapOf(
-                    "trophies" to newTrophies,
-                    "ecoCoins" to newCoins,
-                    "wins" to newWins,
-                    "losses" to newLosses,
-                    "bossLevels" to updatedLevels,
-                    "bossCopies" to updatedCopies,
-                    "questProgress" to updatedQuests,
-                    "updatedAt" to FieldValue.serverTimestamp()
-                )
-            ).await()
-
-            val updatedProfile = profile.copy(
-                trophies = newTrophies,
-                ecoCoins = newCoins,
-                wins = newWins,
-                losses = newLosses
-            )
-            syncPublicProfile(updatedProfile)
-
-            Result.success(
-                MatchRewardOutcome(
-                    trophyDelta = trophyDelta,
-                    coinsEarned = coinsEarned,
-                    capturedBossId = capturedBossId,
-                    updatedQuestProgress = updatedQuests,
-                    newlyCompletedQuestIds = newlyCompleted
-                )
-            )
+                tx.update(ref, changes)
+                updatedProfile = updated
+                v
+            }.await()
+            updatedProfile?.let { syncPublicProfile(it) }
+            Result.success(value)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            handleFirestoreError(e, OperationType.UPDATE, path)
-            Result.failure(e)
+            handleFirestoreError(e, operation, path)
+            Result.failure(e.cause?.takeIf { it is IllegalArgumentException || it is IllegalStateException } ?: e)
         }
     }
 
-    suspend fun claimQuestReward(profile: UserProfile, quest: QuestDefinition): Result<QuestClaimOutcome> {
-        val uid = auth.currentUser?.uid ?: return Result.failure(IllegalStateException("Not signed in"))
-        val path = "users/$uid"
-        return try {
-            val currentProgress = profile.questProgress[quest.id] ?: 0
-            val alreadyClaimed = profile.questClaimed[quest.id] == true
-            require(currentProgress >= quest.target) { "Quest objective not completed yet." }
-            require(!alreadyClaimed) { "Quest reward already claimed." }
-
-            val arena = GameCatalog.arenaForTrophies(profile.trophies)
-            val pool = GameCatalog.cumulativeBossPoolForArena(arena.id)
-            val rarityMatches = pool.filter { it.rarity == quest.rewardRarity }.ifEmpty {
-                GameCatalog.bosses.filter { it.rarity == quest.rewardRarity }.ifEmpty { pool }
-            }
-            val rewardedBoss = rarityMatches.random()
-
-            val updatedLevels = profile.bossLevels.toMutableMap()
-            val updatedCopies = profile.bossCopies.toMutableMap()
-            if ((updatedLevels[rewardedBoss.id] ?: 0) == 0) {
-                updatedLevels[rewardedBoss.id] = 1
-                updatedCopies[rewardedBoss.id] = (updatedCopies[rewardedBoss.id] ?: 0) + (quest.cardRewardCount - 1).coerceAtLeast(0)
-            } else {
-                updatedCopies[rewardedBoss.id] = (updatedCopies[rewardedBoss.id] ?: 0) + quest.cardRewardCount
-            }
-
-            val updatedClaimed = profile.questClaimed.toMutableMap().apply { put(quest.id, true) }
-            val newCoins = profile.ecoCoins + quest.coinReward
-
-            db.collection("users").document(uid).update(
-                mapOf(
-                    "ecoCoins" to newCoins,
-                    "bossLevels" to updatedLevels,
-                    "bossCopies" to updatedCopies,
-                    "questClaimed" to updatedClaimed,
-                    "updatedAt" to FieldValue.serverTimestamp()
-                )
-            ).await()
-
-            Result.success(
-                QuestClaimOutcome(
-                    coinsAwarded = quest.coinReward,
-                    rewardedBossId = rewardedBoss.id,
-                    cardsAwarded = quest.cardRewardCount
-                )
-            )
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            handleFirestoreError(e, OperationType.UPDATE, path)
-            Result.failure(e)
+    suspend fun updateEquippedDeck(newDeckIds: List<String>): Result<Unit> =
+        mutateProfile(OperationType.UPDATE) { p ->
+            require(newDeckIds.size == 3 && newDeckIds.distinct().size == 3) { "Eco-Deck must contain 3 distinct Bosses." }
+            require(newDeckIds.all { (p.bossLevels[it] ?: 0) >= 1 }) { "Capture this Boss first to unlock it." }
+            Triple(p.copy(equippedDeckIds = newDeckIds), listOf("equippedDeckIds"), Unit)
         }
-    }
+
+    @Suppress("UNUSED_PARAMETER")
+    suspend fun upgradeBoss(profile: UserProfile, bossId: String): Result<Int> =
+        mutateProfile(OperationType.UPDATE) { p ->
+            val (updated, newLevel) = RewardRules.upgradeBoss(p, bossId)
+            Triple(updated, listOf("bossLevels", "bossCopies", "ecoCoins"), newLevel)
+        }
+
+    @Suppress("UNUSED_PARAMETER")
+    suspend fun applyMatchResult(profile: UserProfile, telemetry: MatchTelemetry): Result<MatchRewardOutcome> =
+        mutateProfile(OperationType.UPDATE) { p ->
+            val (updated, outcome) = RewardRules.matchResult(p, telemetry)
+            Triple(updated, listOf("trophies", "ecoCoins", "wins", "losses", "bossLevels", "bossCopies", "questProgress"), outcome)
+        }
+
+    @Suppress("UNUSED_PARAMETER")
+    suspend fun claimQuestReward(profile: UserProfile, quest: QuestDefinition): Result<QuestClaimOutcome> =
+        mutateProfile(OperationType.UPDATE) { p ->
+            val (updated, outcome) = RewardRules.claimQuest(p, quest)
+            Triple(updated, listOf("ecoCoins", "bossLevels", "bossCopies", "questClaimed"), outcome)
+        }
 
     // --- Friends & Public Profiles ---
     suspend fun addFriendByCode(profile: UserProfile, rawCode: String): Result<PublicProfile> {
-        val uid = auth.currentUser?.uid ?: return Result.failure(IllegalStateException("Not signed in"))
         val code = rawCode.trim().uppercase()
+        if (isGuestMode()) {
+            return try {
+                require(code.length in 6..8) { "Enter a valid 6-character Friend Code (e.g. TN7A2K)." }
+                val found = SocialSeedCatalog.communityProfiles.firstOrNull { it.friendCode == code }
+                    ?: return Result.failure(IllegalArgumentException("No player found with Friend Code $code."))
+                val current = ensureGuestProfile()
+                require(found.userId != current.userId) { "You cannot add your own Friend Code." }
+                if (found.userId !in current.friendUids) {
+                    saveGuest(current.copy(friendUids = (current.friendUids + found.userId).take(50)))
+                }
+                Result.success(found)
+            } catch (e: Exception) {
+                Result.failure(e)
+            }
+        }
+        val uid = auth.currentUser?.uid ?: return Result.failure(IllegalStateException("Not signed in"))
         val path = "publicProfiles"
         return try {
             require(code.length in 6..8) { "Enter a valid 6-character Friend Code (e.g. TN4K9P)." }
@@ -393,17 +654,17 @@ class WasteCrushRepository(private val db: FirebaseFirestore) {
                 .await()
             val found = snap.documents.firstOrNull()
                 ?.toObject(PublicProfile::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
+                ?: SocialSeedCatalog.communityProfiles.firstOrNull { it.friendCode == code }
                 ?: return Result.failure(IllegalArgumentException("No player found with Friend Code $code."))
             require(found.userId != uid) { "You cannot add your own Friend Code." }
-            if (found.userId !in profile.friendUids) {
-                val nextFriends = (profile.friendUids + found.userId).take(50)
-                db.collection("users").document(uid).update(
-                    mapOf(
-                        "friendUids" to nextFriends,
-                        "updatedAt" to FieldValue.serverTimestamp()
-                    )
-                ).await()
-            }
+            require(profile.friendUids.size < 50 || found.userId in profile.friendUids) { "Friend list is full (50)." }
+            // arrayUnion is atomic: no lost update if two adds race.
+            db.collection("users").document(uid).update(
+                mapOf(
+                    "friendUids" to FieldValue.arrayUnion(found.userId),
+                    "updatedAt" to FieldValue.serverTimestamp()
+                )
+            ).await()
             Result.success(found)
         } catch (e: CancellationException) {
             throw e
@@ -414,13 +675,17 @@ class WasteCrushRepository(private val db: FirebaseFirestore) {
     }
 
     suspend fun removeFriend(profile: UserProfile, friendUid: String): Result<Unit> {
+        if (isGuestMode()) {
+            val current = ensureGuestProfile()
+            saveGuest(current.copy(friendUids = current.friendUids.filterNot { it == friendUid }))
+            return Result.success(Unit)
+        }
         val uid = auth.currentUser?.uid ?: return Result.failure(IllegalStateException("Not signed in"))
         val path = "users/$uid"
         return try {
-            val nextFriends = profile.friendUids.filterNot { it == friendUid }
             db.collection("users").document(uid).update(
                 mapOf(
-                    "friendUids" to nextFriends,
+                    "friendUids" to FieldValue.arrayRemove(friendUid),
                     "updatedAt" to FieldValue.serverTimestamp()
                 )
             ).await()
@@ -434,6 +699,10 @@ class WasteCrushRepository(private val db: FirebaseFirestore) {
     }
 
     fun observePublicProfiles(): Flow<List<PublicProfile>> = flow {
+        if (isGuestMode()) {
+            emit(SocialSeedCatalog.communityProfiles)
+            return@flow
+        }
         val uid = requireUserId()
         val path = "publicProfiles"
         emitAll(
@@ -441,7 +710,11 @@ class WasteCrushRepository(private val db: FirebaseFirestore) {
                 .whereEqualTo("publicVisible", true)
                 .limit(80)
                 .snapshots()
-                .map { snap -> snap.toObjects(PublicProfile::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE) }
+                .map { snap ->
+                    val remote = snap.toObjects(PublicProfile::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
+                    val remoteIds = remote.map { it.userId }.toSet()
+                    remote + SocialSeedCatalog.communityProfiles.filter { it.userId !in remoteIds }
+                }
                 .catch { error ->
                     val fsErr = generateSequence(error) { it.cause }.filterIsInstance<FirebaseFirestoreException>().firstOrNull()
                     if (fsErr == null && error is CancellationException) throw error
@@ -455,6 +728,7 @@ class WasteCrushRepository(private val db: FirebaseFirestore) {
 
     // --- Matchmaking & Live Matches ---
     suspend fun enqueueForMatchmaking(profile: UserProfile, arenaId: Int): Result<MatchmakingTicket?> {
+        if (isGuestMode()) return Result.failure(IllegalStateException("Offline guest mode: online matchmaking disabled."))
         val uid = auth.currentUser?.uid ?: return Result.failure(IllegalStateException("Not signed in"))
         val path = "matchmakingQueue"
         return try {
@@ -495,6 +769,10 @@ class WasteCrushRepository(private val db: FirebaseFirestore) {
     }
 
     fun observeMyQueueTicket(): Flow<MatchmakingTicket?> = flow {
+        if (isGuestMode()) {
+            emit(null)
+            return@flow
+        }
         val uid = requireUserId()
         val path = "matchmakingQueue/$uid"
         emitAll(
@@ -515,18 +793,33 @@ class WasteCrushRepository(private val db: FirebaseFirestore) {
         )
     }
 
-    suspend fun claimOpponentTicket(opponentUid: String, matchId: String): Result<Unit> {
+    /**
+     * Atomically checks that the opponent is still SEARCHING, creates the live match and claims
+     * their ticket. Fails (and writes nothing) if someone else claimed it or they left the queue.
+     */
+    suspend fun createMatchAndClaimTicket(match: LiveMatch, opponentUid: String): Result<String> {
+        val uid = auth.currentUser?.uid ?: return Result.failure(IllegalStateException("Not signed in"))
         val path = "matchmakingQueue/$opponentUid"
         return try {
-            requireUserId()
-            db.collection("matchmakingQueue").document(opponentUid).update(
-                mapOf(
-                    "status" to "MATCHED",
-                    "matchId" to matchId,
-                    "updatedAt" to FieldValue.serverTimestamp()
+            val matchRef = db.collection("liveMatches").document()
+            val ticketRef = db.collection("matchmakingQueue").document(opponentUid)
+            db.runTransaction { tx ->
+                val ticket = tx.get(ticketRef)
+                if (!ticket.exists() || ticket.getString("status") != "SEARCHING") {
+                    throw IllegalStateException("Opponent is no longer searching.")
+                }
+                tx.set(matchRef, match.copy(creatorUid = uid).toCreateMap())
+                tx.update(
+                    ticketRef,
+                    mapOf(
+                        "status" to "MATCHED",
+                        "matchId" to matchRef.id,
+                        "updatedAt" to FieldValue.serverTimestamp()
+                    )
                 )
-            ).await()
-            Result.success(Unit)
+                null
+            }.await()
+            Result.success(matchRef.id)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -536,6 +829,7 @@ class WasteCrushRepository(private val db: FirebaseFirestore) {
     }
 
     suspend fun leaveMatchmakingQueue(): Result<Unit> {
+        if (isGuestMode()) return Result.success(Unit)
         val uid = auth.currentUser?.uid ?: return Result.success(Unit)
         val path = "matchmakingQueue/$uid"
         return try {
@@ -550,6 +844,7 @@ class WasteCrushRepository(private val db: FirebaseFirestore) {
     }
 
     suspend fun createLiveMatch(match: LiveMatch): Result<String> {
+        if (isGuestMode()) return Result.failure(IllegalStateException("Offline guest mode"))
         val uid = auth.currentUser?.uid ?: return Result.failure(IllegalStateException("Not signed in"))
         var path = "liveMatches"
         return try {
@@ -567,6 +862,10 @@ class WasteCrushRepository(private val db: FirebaseFirestore) {
     }
 
     fun observeLiveMatch(matchId: String): Flow<LiveMatch?> = flow {
+        if (isGuestMode() || matchId.startsWith("local_")) {
+            emit(null)
+            return@flow
+        }
         val uid = requireUserId()
         val path = "liveMatches/$matchId"
         emitAll(
@@ -594,6 +893,7 @@ class WasteCrushRepository(private val db: FirebaseFirestore) {
         player1: PlayerLiveState?,
         player2: PlayerLiveState?
     ): Result<Unit> {
+        if (isGuestMode() || matchId.startsWith("local_")) return Result.success(Unit)
         val path = "liveMatches/$matchId"
         return try {
             requireUserId()
@@ -615,6 +915,7 @@ class WasteCrushRepository(private val db: FirebaseFirestore) {
     }
 
     suspend fun adjustSpectatorCount(matchId: String, delta: Long): Result<Unit> {
+        if (isGuestMode() || matchId.startsWith("local_")) return Result.success(Unit)
         val path = "liveMatches/$matchId"
         return try {
             requireUserId()
@@ -630,7 +931,22 @@ class WasteCrushRepository(private val db: FirebaseFirestore) {
         }
     }
 
+    /** Fire-and-forget variant usable when the caller's scope is being cancelled (e.g. onCleared). */
+    fun adjustSpectatorCountDetached(matchId: String, delta: Long) {
+        if (isGuestMode() || matchId.startsWith("local_")) return
+        try {
+            db.collection("liveMatches").document(matchId)
+                .update(mapOf("spectatorCount" to FieldValue.increment(delta)))
+                .addOnFailureListener { handleFirestoreError(it, OperationType.UPDATE, "liveMatches/$matchId") }
+        } catch (_: Exception) {
+        }
+    }
+
     fun observeActiveLiveMatches(): Flow<List<LiveMatch>> = flow {
+        if (isGuestMode()) {
+            emit(emptyList())
+            return@flow
+        }
         val uid = requireUserId()
         val path = "liveMatches"
         emitAll(
@@ -655,6 +971,11 @@ class WasteCrushRepository(private val db: FirebaseFirestore) {
 
     // --- Replays ---
     suspend fun saveReplay(replay: MatchReplay): Result<String> {
+        if (isGuestMode()) {
+            val id = "local_replay_${System.currentTimeMillis()}"
+            localReplays[id] = replay.copy(id = id, creatorUid = GUEST_UID)
+            return Result.success(id)
+        }
         val uid = auth.currentUser?.uid ?: return Result.failure(IllegalStateException("Not signed in"))
         var path = "replays"
         return try {
@@ -672,6 +993,10 @@ class WasteCrushRepository(private val db: FirebaseFirestore) {
     }
 
     fun observePublicReplays(): Flow<List<MatchReplay>> = flow {
+        if (isGuestMode()) {
+            emit(localReplays.values.sortedByDescending { it.id })
+            return@flow
+        }
         val uid = requireUserId()
         val path = "replays"
         emitAll(
@@ -695,6 +1020,8 @@ class WasteCrushRepository(private val db: FirebaseFirestore) {
     }
 
     suspend fun getReplayById(replayId: String): Result<MatchReplay?> {
+        localReplays[replayId]?.let { return Result.success(it) }
+        if (isGuestMode()) return Result.success(null)
         val path = "replays/$replayId"
         return try {
             requireUserId()

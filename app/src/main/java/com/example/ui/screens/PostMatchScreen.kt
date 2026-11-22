@@ -10,7 +10,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
-import androidx.compose.runtime.Composable
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -96,18 +96,58 @@ fun PostMatchScreen(
                 }
             }
 
+            // Eco-postcard: the place transforms from polluted to its real photo on victory
+            var revealed by remember { mutableStateOf(false) }
+            LaunchedEffect(state.wonMatch, state.matchId) {
+                revealed = false
+                if (state.wonMatch) {
+                    kotlinx.coroutines.delay(650L)
+                    revealed = true
+                }
+            }
+            Surface(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(20.dp),
+                color = DarkSurfaceCard,
+                border = BorderStroke(2.dp, if (state.wonMatch) SaffronGold else DarkBorderSubtle)
+            ) {
+                Column {
+                    com.example.ui.components.EnvironmentScene(
+                        place = place,
+                        pollution = if (revealed) 0f else local.pollutionLevel.coerceAtLeast(if (state.wonMatch) 0.6f else 0f),
+                        purified = revealed,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(170.dp)
+                            .clip(RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp))
+                    )
+                    Column(modifier = Modifier.padding(12.dp)) {
+                        Text(
+                            text = if (place.arabicName.isNotBlank()) "${place.name} • ${place.arabicName}" else place.name,
+                            style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.ExtraBold),
+                            color = TextOnDark
+                        )
+                        Text(
+                            text = place.ecoFact,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = TextMutedOnDark
+                        )
+                    }
+                }
+            }
+
             // Head-to-Head Damage & Pollution Clearing Breakdown
             Surface(
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(20.dp),
-                color = SurfaceWhite,
-                border = BorderStroke(2.5.dp, DeepNavyInk)
+                color = DarkSurfaceCard,
+                border = BorderStroke(2.dp, DarkBorderSubtle)
             ) {
                 Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Text(
                         text = "1v1 Race Breakdown",
-                        style = MaterialTheme.typography.titleMedium,
-                        color = DeepNavyInk
+                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.ExtraBold),
+                        color = TextOnDark
                     )
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -117,25 +157,25 @@ fun PostMatchScreen(
                             title = local.name,
                             damage = local.totalDamage,
                             restoration = local.restorationPct,
-                            accent = EcoEmeraldDark,
+                            accent = EcoEmeraldBright,
                             modifier = Modifier.weight(1f)
                         )
                         ComparisonColumn(
                             title = rival.name,
                             damage = rival.totalDamage,
                             restoration = rival.restorationPct,
-                            accent = CarthageCoral,
+                            accent = BossHpRedTop,
                             modifier = Modifier.weight(1f)
                         )
                     }
-                    HorizontalDivider(color = SurfaceSoftBlue)
+                    HorizontalDivider(color = DarkBorderSubtle.copy(alpha = 0.45f))
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceEvenly
                     ) {
-                        MiniMetric("Blue Tiles", "${state.blueTilesMatched}", TilePlasticBlue)
-                        MiniMetric("Total Matched", "${state.totalTilesMatched}", SidiCobalt)
-                        MiniMetric("Best Combo", "${state.maxCombo}x", SaharanAmber)
+                        MiniMetric("Blue Tiles", "${state.blueTilesMatched}", CeramicBlueTop)
+                        MiniMetric("Total Matched", "${state.totalTilesMatched}", SaffronGold)
+                        MiniMetric("Best Combo", "${state.maxCombo}x", EcoEmeraldBright)
                     }
                 }
             }
@@ -149,16 +189,18 @@ fun PostMatchScreen(
                     icon = Icons.Default.EmojiEvents,
                     label = "Trophies",
                     value = if (trophyDelta >= 0) "+$trophyDelta" else "$trophyDelta",
-                    bgColor = SaffronCream,
-                    iconTint = SaffronGoldDark,
+                    bgColor = DarkSurfaceCard,
+                    borderColor = SaffronGold,
+                    iconTint = SaffronGold,
                     modifier = Modifier.weight(1f)
                 )
                 PayoutBadge(
                     icon = Icons.Default.MonetizationOn,
                     label = "Eco-Coins",
                     value = "+$coinsEarned",
-                    bgColor = EcoMintSoft,
-                    iconTint = EcoEmeraldDark,
+                    bgColor = DarkSurfaceCard,
+                    borderColor = EcoEmeraldBright,
+                    iconTint = EcoEmeraldBright,
                     modifier = Modifier.weight(1f)
                 )
             }
@@ -172,9 +214,9 @@ fun PostMatchScreen(
                 Surface(
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(22.dp),
-                    color = SurfaceWhite,
-                    border = BorderStroke(3.dp, boss.rarity.frameColor),
-                    shadowElevation = 6.dp
+                    color = DarkSurfaceCard,
+                    border = BorderStroke(2.5.dp, boss.rarity.frameColor),
+                    shadowElevation = 8.dp
                 ) {
                     Row(
                         modifier = Modifier.padding(14.dp),
@@ -184,7 +226,7 @@ fun PostMatchScreen(
                             modifier = Modifier
                                 .size(82.dp)
                                 .clip(RoundedCornerShape(16.dp))
-                                .background(boss.bodyColor.copy(alpha = 0.16f))
+                                .background(boss.bodyColor.copy(alpha = 0.22f))
                                 .border(2.dp, boss.rarity.frameColor, RoundedCornerShape(16.dp)),
                             contentAlignment = Alignment.Center
                         ) {
@@ -196,7 +238,7 @@ fun PostMatchScreen(
                                 Text(
                                     text = "+1 BOSS CARD CAPTURED!",
                                     style = MaterialTheme.typography.labelSmall,
-                                    color = EcoEmeraldDark
+                                    color = EcoEmeraldBright
                                 )
                                 RarityChip(boss.rarity)
                             }
@@ -204,18 +246,18 @@ fun PostMatchScreen(
                             Text(
                                 text = boss.name,
                                 style = MaterialTheme.typography.titleLarge,
-                                color = DeepNavyInk
+                                color = TextOnDark
                             )
                             Text(
                                 text = "Level $lvl  •  $copies / $needed copies for next level",
                                 style = MaterialTheme.typography.bodyMedium,
-                                color = MutedSlateText
+                                color = TextMutedOnDark
                             )
                             Spacer(Modifier.height(6.dp))
                             LinearProgressIndicator(
                                 progress = { (copies.toFloat() / needed.toFloat()).coerceIn(0f, 1f) },
-                                color = EcoEmerald,
-                                trackColor = SurfaceSoftBlue,
+                                color = EcoEmeraldBright,
+                                trackColor = Color(0xFF061022),
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .height(8.dp)
@@ -231,21 +273,21 @@ fun PostMatchScreen(
                 Surface(
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(16.dp),
-                    color = SaffronCream,
-                    border = BorderStroke(2.dp, SaffronGoldDark)
+                    color = DarkSurfaceCard,
+                    border = BorderStroke(2.dp, SaffronGold)
                 ) {
                     Row(
                         modifier = Modifier.padding(12.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Icon(Icons.Default.Stars, contentDescription = null, tint = SaffronGoldDark, modifier = Modifier.size(24.dp))
+                        Icon(Icons.Default.Stars, contentDescription = null, tint = SaffronGold, modifier = Modifier.size(24.dp))
                         Spacer(Modifier.width(10.dp))
                         Column {
-                            Text("Quest Objective Completed!", style = MaterialTheme.typography.titleSmall, color = DeepNavyInk)
+                            Text("Quest Objective Completed!", style = MaterialTheme.typography.titleSmall, color = GlowBeamGold)
                             val names = reward.newlyCompletedQuestIds.mapNotNull { id ->
                                 GameCatalog.quests.firstOrNull { it.id == id }?.title
                             }.joinToString(", ")
-                            Text("Claim rewards in Quests: $names", style = MaterialTheme.typography.bodyMedium, color = DeepNavyInk)
+                            Text("Claim rewards in Quests: $names", style = MaterialTheme.typography.bodyMedium, color = TextOnDark)
                         }
                     }
                 }
@@ -272,10 +314,10 @@ fun PostMatchScreen(
                 GlossyButton(
                     text = "Home Hub",
                     onClick = onReturnHome,
-                    topColor = Color(0xFFE2E8F0),
-                    bottomColor = Color(0xFFCBD5E1),
-                    lipColor = Color(0xFF94A3B8),
-                    textColor = DeepNavyInk,
+                    topColor = Color(0xFF2B4D8A),
+                    bottomColor = Color(0xFF18305C),
+                    lipColor = Color(0xFF0C1A36),
+                    textColor = Color.White,
                     modifier = Modifier.weight(1f),
                     tag = "post_match_home"
                 )
@@ -301,8 +343,8 @@ private fun ComparisonColumn(
 ) {
     Column(modifier = modifier, horizontalAlignment = Alignment.CenterHorizontally) {
         Text(text = title, style = MaterialTheme.typography.titleSmall, color = accent, maxLines = 1)
-        Text(text = "$damage DMG", style = MaterialTheme.typography.headlineMedium, color = DeepNavyInk)
-        Text(text = "$restoration% Clean", style = MaterialTheme.typography.labelMedium, color = MutedSlateText)
+        Text(text = "$damage DMG", style = MaterialTheme.typography.headlineMedium, color = TextOnDark)
+        Text(text = "$restoration% Clean", style = MaterialTheme.typography.labelMedium, color = TextMutedOnDark)
     }
 }
 
@@ -310,7 +352,7 @@ private fun ComparisonColumn(
 private fun MiniMetric(label: String, value: String, tint: Color) {
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
         Text(text = value, style = MaterialTheme.typography.titleMedium, color = tint)
-        Text(text = label, style = MaterialTheme.typography.labelSmall, color = MutedSlateText)
+        Text(text = label, style = MaterialTheme.typography.labelSmall, color = TextMutedOnDark)
     }
 }
 
@@ -320,6 +362,7 @@ private fun PayoutBadge(
     label: String,
     value: String,
     bgColor: Color,
+    borderColor: Color,
     iconTint: Color,
     modifier: Modifier = Modifier
 ) {
@@ -327,7 +370,7 @@ private fun PayoutBadge(
         modifier = modifier,
         shape = RoundedCornerShape(18.dp),
         color = bgColor,
-        border = BorderStroke(2.5.dp, DeepNavyInk)
+        border = BorderStroke(2.dp, borderColor)
     ) {
         Row(
             modifier = Modifier.padding(14.dp),
@@ -337,8 +380,8 @@ private fun PayoutBadge(
             Icon(imageVector = icon, contentDescription = null, tint = iconTint, modifier = Modifier.size(28.dp))
             Spacer(Modifier.width(8.dp))
             Column {
-                Text(text = value, style = MaterialTheme.typography.headlineMedium, color = DeepNavyInk)
-                Text(text = label, style = MaterialTheme.typography.labelSmall, color = MutedSlateText)
+                Text(text = value, style = MaterialTheme.typography.headlineMedium, color = TextOnDark)
+                Text(text = label, style = MaterialTheme.typography.labelSmall, color = TextMutedOnDark)
             }
         }
     }

@@ -17,3 +17,9 @@ local.properties
 .env
 debug.keystore
 *-debug.log
+
+# Local tool state & Firebase config (not committed)
+.aistudio/
+.antigravity/
+.vscode/
+app/google-services.json

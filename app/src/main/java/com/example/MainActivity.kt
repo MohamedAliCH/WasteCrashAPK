@@ -2,6 +2,7 @@ package com.example
 
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.background
@@ -32,11 +33,15 @@ import com.example.viewmodel.*
 import com.google.firebase.Firebase
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.auth
+import kotlinx.coroutines.tasks.await
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        enableEdgeToEdge()
+        enableEdgeToEdge(
+            statusBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),
+            navigationBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT)
+        )
         setContent {
             WasteCrushTheme {
                 WasteCrushRoot()
@@ -54,13 +59,16 @@ private enum class HubTab(
     BATTLE("Battle", Icons.Filled.Bolt, Icons.Outlined.Bolt, "nav_battle"),
     DECK("Decks", Icons.Filled.Style, Icons.Outlined.Style, "nav_decks"),
     ARENAS("Arenas", Icons.Filled.EmojiEvents, Icons.Outlined.EmojiEvents, "nav_arenas"),
-    WATCH("Watch", Icons.Filled.LiveTv, Icons.Outlined.LiveTv, "nav_watch"),
-    QUESTS("Quests", Icons.Filled.TaskAlt, Icons.Outlined.TaskAlt, "nav_quests")
+    ALBUM("Album", Icons.Filled.PhotoLibrary, Icons.Outlined.PhotoLibrary, "nav_album"),
+    SOCIAL("Social", Icons.Filled.Groups, Icons.Outlined.Groups, "nav_social")
 }
 
 private sealed interface FullScreenOverlay {
     data object None : FullScreenOverlay
     data object BattleFlow : FullScreenOverlay
+    data class TunisiaMap(val initialPlaceId: String? = null) : FullScreenOverlay
+    data object Quests : FullScreenOverlay
+    data object SpectatorHub : FullScreenOverlay
     data class SpectatorLive(val matchId: String) : FullScreenOverlay
     data class SpectatorReplay(val replayId: String) : FullScreenOverlay
 }
@@ -68,6 +76,7 @@ private sealed interface FullScreenOverlay {
 @Composable
 private fun WasteCrushRoot() {
     var currentUser by remember { mutableStateOf(Firebase.auth.currentUser) }
+    var guestFallback by remember { mutableStateOf(false) }
 
     DisposableEffect(Unit) {
         val listener = FirebaseAuth.AuthStateListener { auth ->
@@ -77,12 +86,37 @@ private fun WasteCrushRoot() {
         onDispose { Firebase.auth.removeAuthStateListener(listener) }
     }
 
-    if (currentUser == null) {
-        AuthScreen(onAuthSuccess = { currentUser = Firebase.auth.currentUser })
+    // No sign-in screen. Debug builds (LOCAL_TEST_MODE) play offline as a local guest; release
+    // builds sign in anonymously and fall back to the local guest if that fails.
+    LaunchedEffect(currentUser) {
+        if (BuildConfig.LOCAL_TEST_MODE) {
+            guestFallback = true
+            return@LaunchedEffect
+        }
+        if (currentUser == null && !guestFallback) {
+            try {
+                Firebase.auth.signInAnonymously().await()
+                currentUser = Firebase.auth.currentUser
+            } catch (_: Exception) {
+                guestFallback = true
+            }
+        }
+    }
+
+    val activeUid = if (BuildConfig.LOCAL_TEST_MODE) WasteCrushRepository.GUEST_UID
+        else currentUser?.uid ?: if (guestFallback) WasteCrushRepository.GUEST_UID else null
+    if (activeUid == null) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(LimestoneBg),
+            contentAlignment = Alignment.Center
+        ) {
+            CircularProgressIndicator(color = SidiCobalt)
+        }
     } else {
-        val uid = currentUser!!.uid
-        key(uid) {
-            AuthenticatedWasteCrushApp(currentUserId = uid)
+        key(activeUid) {
+            AuthenticatedWasteCrushApp(currentUserId = activeUid)
         }
     }
 }
@@ -111,6 +145,8 @@ private fun AuthenticatedWasteCrushApp(currentUserId: String) {
     val publicProfilesState by mainVm.publicProfilesState.collectAsStateWithLifecycle()
     val activeMatchesState by mainVm.activeMatchesState.collectAsStateWithLifecycle()
     val replaysState by mainVm.replaysState.collectAsStateWithLifecycle()
+    val clansState by mainVm.clansState.collectAsStateWithLifecycle()
+    val joinedClanId by mainVm.joinedClanId.collectAsStateWithLifecycle()
     val statusBanner by mainVm.statusBanner.collectAsStateWithLifecycle()
     val claimedOutcome by mainVm.claimedOutcome.collectAsStateWithLifecycle()
 
@@ -184,6 +220,73 @@ private fun AuthenticatedWasteCrushApp(currentUserId: String) {
             return
         }
 
+        is FullScreenOverlay.TunisiaMap -> {
+            val currentProfile = (profileState as? UiState.Success)?.data
+            if (currentProfile != null) {
+                TunisiaMapScreen(
+                    profile = currentProfile,
+                    initialPlaceId = activeOverlay.initialPlaceId,
+                    onBack = { overlay = FullScreenOverlay.None },
+                    onStartBattle = {
+                        matchmakingVm.startMatchmaking(currentProfile)
+                        overlay = FullScreenOverlay.BattleFlow
+                    }
+                )
+            } else {
+                overlay = FullScreenOverlay.None
+            }
+            return
+        }
+
+        is FullScreenOverlay.Quests -> {
+            val currentProfile = (profileState as? UiState.Success)?.data
+            if (currentProfile != null) {
+                QuestsScreen(
+                    profile = currentProfile,
+                    claimedOutcome = claimedOutcome,
+                    onClaimQuest = { quest -> mainVm.claimQuest(currentProfile, quest) },
+                    onDismissClaimOutcome = mainVm::clearClaimedOutcome,
+                    onBack = { overlay = FullScreenOverlay.None }
+                )
+            } else {
+                overlay = FullScreenOverlay.None
+            }
+            return
+        }
+
+        is FullScreenOverlay.SpectatorHub -> {
+            val currentProfile = (profileState as? UiState.Success)?.data
+            if (currentProfile == null) {
+                overlay = FullScreenOverlay.None
+                return
+            }
+            androidx.activity.compose.BackHandler { overlay = FullScreenOverlay.None }
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(DarkBgPrimary)
+                    .windowInsetsPadding(WindowInsets.safeDrawing)
+            ) {
+                SpectatorHubScreen(
+                    profile = currentProfile,
+                    activeMatchesState = activeMatchesState,
+                    replaysState = replaysState,
+                    publicProfilesState = publicProfilesState,
+                    onWatchLiveMatch = { matchId ->
+                        spectatorVm.openLiveMatch(matchId)
+                        overlay = FullScreenOverlay.SpectatorLive(matchId)
+                    },
+                    onWatchReplay = { replayId ->
+                        spectatorVm.openReplay(replayId)
+                        overlay = FullScreenOverlay.SpectatorReplay(replayId)
+                    },
+                    onAddFriend = { code -> mainVm.addFriend(currentProfile, code) },
+                    onRemoveFriend = { fUid, fName -> mainVm.removeFriend(currentProfile, fUid, fName) }
+                )
+            }
+            return
+        }
+
         is FullScreenOverlay.SpectatorLive, is FullScreenOverlay.SpectatorReplay -> {
             SpectatorTheatreScreen(
                 state = spectatorState,
@@ -206,8 +309,11 @@ private fun AuthenticatedWasteCrushApp(currentUserId: String) {
         }
     }
 
-    val liveMatchesCount = (activeMatchesState as? UiState.Success)?.data?.size ?: 0
     val currentProfile = (profileState as? UiState.Success)?.data
+    val unlockedPlacesCount = remember(currentProfile) {
+        if (currentProfile == null) 5
+        else GameCatalog.allPlaces.count { currentProfile.trophies >= GameCatalog.arenaById(it.arenaId).minTrophies }
+    }
     val claimableQuestsCount = remember(currentProfile) {
         if (currentProfile == null) 0
         else GameCatalog.quests.count { q ->
@@ -225,7 +331,7 @@ private fun AuthenticatedWasteCrushApp(currentUserId: String) {
         Row(modifier = Modifier.fillMaxSize()) {
             if (useNavRail) {
                 NavigationRail(
-                    containerColor = SurfaceWhite,
+                    containerColor = DarkSurfaceCard,
                     modifier = Modifier.windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Vertical + WindowInsetsSides.Start))
                 ) {
                     HubTab.entries.forEach { tab ->
@@ -236,12 +342,17 @@ private fun AuthenticatedWasteCrushApp(currentUserId: String) {
                             icon = {
                                 TabIconWithBadge(
                                     tab = tab,
-                                    selected = selected,
-                                    claimableQuests = claimableQuestsCount,
-                                    liveCount = liveMatchesCount
+                                    selected = selected
                                 )
                             },
                             label = { Text(tab.label, style = MaterialTheme.typography.labelSmall) },
+                            colors = NavigationRailItemDefaults.colors(
+                                selectedIconColor = SaffronGold,
+                                selectedTextColor = SaffronGold,
+                                unselectedIconColor = TextMutedOnDark,
+                                unselectedTextColor = TextMutedOnDark,
+                                indicatorColor = DarkSurfaceElevated
+                            ),
                             modifier = Modifier.testTag(tab.tag)
                         )
                     }
@@ -249,13 +360,13 @@ private fun AuthenticatedWasteCrushApp(currentUserId: String) {
             }
 
             Scaffold(
-                containerColor = LimestoneBg,
+                containerColor = DarkBgPrimary,
                 snackbarHost = { SnackbarHost(snackbarHostState) },
                 contentWindowInsets = WindowInsets.safeDrawing,
                 bottomBar = {
                     if (!useNavRail) {
                         NavigationBar(
-                            containerColor = SurfaceWhite,
+                            containerColor = DarkSurfaceCard,
                             tonalElevation = 8.dp
                         ) {
                             HubTab.entries.forEach { tab ->
@@ -266,16 +377,16 @@ private fun AuthenticatedWasteCrushApp(currentUserId: String) {
                                     icon = {
                                         TabIconWithBadge(
                                             tab = tab,
-                                            selected = selected,
-                                            claimableQuests = claimableQuestsCount,
-                                            liveCount = liveMatchesCount
+                                            selected = selected
                                         )
                                     },
                                     label = { Text(tab.label, style = MaterialTheme.typography.labelSmall) },
                                     colors = NavigationBarItemDefaults.colors(
-                                        selectedIconColor = SidiCobalt,
-                                        selectedTextColor = SidiCobalt,
-                                        indicatorColor = SidiSkyLight
+                                        selectedIconColor = SaffronGold,
+                                        selectedTextColor = SaffronGold,
+                                        unselectedIconColor = TextMutedOnDark,
+                                        unselectedTextColor = TextMutedOnDark,
+                                        indicatorColor = DarkSurfaceElevated
                                     ),
                                     modifier = Modifier.testTag(tab.tag)
                                 )
@@ -295,9 +406,9 @@ private fun AuthenticatedWasteCrushApp(currentUserId: String) {
                                 modifier = Modifier.align(Alignment.Center),
                                 horizontalAlignment = Alignment.CenterHorizontally
                             ) {
-                                CircularProgressIndicator(color = SidiCobalt)
+                                CircularProgressIndicator(color = SaffronGold)
                                 Spacer(Modifier.height(10.dp))
-                                Text("Loading Tunisia Eco-Arena...", style = MaterialTheme.typography.titleMedium, color = DeepNavyInk)
+                                Text("Loading Tunisia Eco-Arena...", style = MaterialTheme.typography.titleMedium, color = TextOnDark)
                             }
                         }
                         is UiState.Error -> {
@@ -309,8 +420,8 @@ private fun AuthenticatedWasteCrushApp(currentUserId: String) {
                                 verticalArrangement = Arrangement.spacedBy(10.dp)
                             ) {
                                 Icon(Icons.Default.CloudOff, contentDescription = null, tint = CarthageCoral, modifier = Modifier.size(48.dp))
-                                Text("Connection Error", style = MaterialTheme.typography.headlineMedium, color = DeepNavyInk)
-                                Text(pState.message, style = MaterialTheme.typography.bodyMedium, color = MutedSlateText)
+                                Text("Connection Error", style = MaterialTheme.typography.headlineMedium, color = TextOnDark)
+                                Text(pState.message, style = MaterialTheme.typography.bodyMedium, color = TextMutedOnDark)
                             }
                         }
                         is UiState.Success -> {
@@ -324,18 +435,32 @@ private fun AuthenticatedWasteCrushApp(currentUserId: String) {
                                 when (currentTab) {
                                     HubTab.BATTLE -> HomeScreen(
                                         profile = profile,
-                                        liveMatchesCount = liveMatchesCount,
+                                        unlockedPlacesCount = unlockedPlacesCount,
                                         claimableQuestsCount = claimableQuestsCount,
                                         onBattleClicked = {
                                             matchmakingVm.startMatchmaking(profile)
                                             overlay = FullScreenOverlay.BattleFlow
                                         },
+                                        onOpenTunisiaMap = {
+                                            overlay = FullScreenOverlay.TunisiaMap()
+                                        },
                                         onOpenDeck = { currentTab = HubTab.DECK },
                                         onOpenArenas = { currentTab = HubTab.ARENAS },
-                                        onOpenSpectator = { currentTab = HubTab.WATCH },
-                                        onOpenQuests = { currentTab = HubTab.QUESTS },
+                                        onOpenAlbum = { currentTab = HubTab.ALBUM },
+                                        onOpenQuests = {
+                                            overlay = FullScreenOverlay.Quests
+                                        },
+                                        onOpenSpectatorHub = {
+                                            overlay = FullScreenOverlay.SpectatorHub
+                                        },
                                         onSignOut = {
-                                            AuthManager.signOut(credentialManager, scope)
+                                            val user = Firebase.auth.currentUser
+                                            if (repository.isGuestMode() || user == null || user.isAnonymous) {
+                                                // Signing out an anonymous account would create a new one and lose all progress.
+                                                mainVm.showBanner("Guest profile: progress is saved on this device. Nothing to sign out.")
+                                            } else {
+                                                AuthManager.signOut(credentialManager, scope)
+                                            }
                                         }
                                     )
 
@@ -345,30 +470,33 @@ private fun AuthenticatedWasteCrushApp(currentUserId: String) {
                                         onUpgradeBoss = { bossId -> mainVm.upgradeBoss(profile, bossId) }
                                     )
 
-                                    HubTab.ARENAS -> ArenasTrophyRoadScreen(profile = profile)
-
-                                    HubTab.WATCH -> SpectatorHubScreen(
+                                    HubTab.ARENAS -> ArenasTrophyRoadScreen(
                                         profile = profile,
-                                        activeMatchesState = activeMatchesState,
-                                        replaysState = replaysState,
-                                        publicProfilesState = publicProfilesState,
-                                        onWatchLiveMatch = { matchId ->
-                                            spectatorVm.openLiveMatch(matchId)
-                                            overlay = FullScreenOverlay.SpectatorLive(matchId)
-                                        },
-                                        onWatchReplay = { replayId ->
-                                            spectatorVm.openReplay(replayId)
-                                            overlay = FullScreenOverlay.SpectatorReplay(replayId)
-                                        },
-                                        onAddFriend = { code -> mainVm.addFriend(profile, code) },
-                                        onRemoveFriend = { fUid, fName -> mainVm.removeFriend(profile, fUid, fName) }
+                                        onOpenPlaceOnMap = { placeId ->
+                                            overlay = FullScreenOverlay.TunisiaMap(initialPlaceId = placeId)
+                                        }
                                     )
 
-                                    HubTab.QUESTS -> QuestsScreen(
+                                    HubTab.ALBUM -> PlacesAlbumScreen(
                                         profile = profile,
-                                        claimedOutcome = claimedOutcome,
-                                        onClaimQuest = { quest -> mainVm.claimQuest(profile, quest) },
-                                        onDismissClaimOutcome = mainVm::clearClaimedOutcome
+                                        onViewOnMap = { placeId ->
+                                            overlay = FullScreenOverlay.TunisiaMap(initialPlaceId = placeId)
+                                        }
+                                    )
+
+                                    HubTab.SOCIAL -> SocialScreen(
+                                        profile = profile,
+                                        publicProfilesState = publicProfilesState,
+                                        clans = clansState,
+                                        joinedClanId = joinedClanId,
+                                        onAddFriend = { code -> mainVm.addFriend(profile, code) },
+                                        onRemoveFriend = { fUid, fName -> mainVm.removeFriend(profile, fUid, fName) },
+                                        onJoinClan = { clanId -> mainVm.joinClan(clanId, profile) },
+                                        onLeaveClan = { mainVm.leaveClan(profile) },
+                                        onCreateClan = { name, tag, region, motto ->
+                                            mainVm.createClan(name, tag, region, motto, profile)
+                                        },
+                                        onSendClanMessage = { msg -> mainVm.sendClanMessage(msg, profile) }
                                     )
                                 }
                             }
@@ -383,24 +511,8 @@ private fun AuthenticatedWasteCrushApp(currentUserId: String) {
 @Composable
 private fun TabIconWithBadge(
     tab: HubTab,
-    selected: Boolean,
-    claimableQuests: Int,
-    liveCount: Int
+    selected: Boolean
 ) {
     val icon = if (selected) tab.selectedIcon else tab.unselectedIcon
-    when {
-        tab == HubTab.QUESTS && claimableQuests > 0 -> {
-            BadgedBox(badge = { Badge(containerColor = EcoEmerald) { Text("$claimableQuests", color = Color.White) } }) {
-                Icon(icon, contentDescription = tab.label)
-            }
-        }
-        tab == HubTab.WATCH && liveCount > 0 -> {
-            BadgedBox(badge = { Badge(containerColor = CarthageCoral) { Text("$liveCount", color = Color.White) } }) {
-                Icon(icon, contentDescription = tab.label)
-            }
-        }
-        else -> {
-            Icon(icon, contentDescription = tab.label)
-        }
-    }
+    Icon(icon, contentDescription = tab.label)
 }

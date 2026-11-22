@@ -20,6 +20,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
@@ -65,6 +66,11 @@ fun BossCollectionScreen(
     Column(
         modifier = Modifier
             .fillMaxSize()
+            .background(
+                Brush.verticalGradient(
+                    listOf(Color(0xFF0C1E42), DarkBgPrimary, Color(0xFF050D1D))
+                )
+            )
             .padding(horizontal = 16.dp, vertical = 10.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
@@ -75,8 +81,8 @@ fun BossCollectionScreen(
             verticalAlignment = Alignment.CenterVertically
         ) {
             Column {
-                Text("Eco-Deck & Bosses", style = MaterialTheme.typography.headlineMedium, color = DeepNavyInk)
-                Text("Purified $unlockedCount / 15 Tunisian Bosses", style = MaterialTheme.typography.labelMedium, color = MutedSlateText)
+                Text("Eco-Deck & Bosses", style = MaterialTheme.typography.headlineMedium.copy(fontWeight = FontWeight.ExtraBold), color = TextOnDark)
+                Text("Purified $unlockedCount / 15 Tunisian Bosses", style = MaterialTheme.typography.labelMedium, color = TextMutedOnDark)
             }
             StatPill(
                 value = "${profile.ecoCoins}",
@@ -88,15 +94,23 @@ fun BossCollectionScreen(
         // Active 3-Slot Eco-Deck Panel
         Surface(
             modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(20.dp),
-            color = SidiCobalt,
-            border = BorderStroke(2.5.dp, DeepNavyInk)
+            shape = RoundedCornerShape(22.dp),
+            color = DarkSurfaceCard,
+            border = BorderStroke(
+                2.dp,
+                Brush.linearGradient(listOf(GlowBeamGold, SaffronGold, CeramicBlueTop))
+            ),
+            shadowElevation = 8.dp
         ) {
-            Column(modifier = Modifier.padding(12.dp)) {
+            Column(
+                modifier = Modifier
+                    .background(Brush.verticalGradient(listOf(Color(0xFF163268), DarkSurfaceCard)))
+                    .padding(12.dp)
+            ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(Icons.Default.AutoAwesome, contentDescription = null, tint = SaffronGold, modifier = Modifier.size(18.dp))
                     Spacer(Modifier.width(6.dp))
-                    Text("ACTIVE ECO-DECK (3 SLOTS)", style = MaterialTheme.typography.titleSmall, color = Color.White)
+                    Text("ACTIVE ECO-DECK (3 SLOTS)", style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.ExtraBold), color = GlowBeamGold)
                 }
                 Spacer(Modifier.height(8.dp))
                 Row(
@@ -111,24 +125,24 @@ fun BossCollectionScreen(
                                 .weight(1f)
                                 .clickable { inspectedBoss = boss }
                                 .testTag("deck_slot_card_$slotIdx"),
-                            shape = RoundedCornerShape(14.dp),
-                            color = SurfaceWhite,
+                            shape = RoundedCornerShape(16.dp),
+                            color = DarkSurfaceElevated,
                             border = BorderStroke(2.dp, boss.rarity.frameColor)
                         ) {
                             Column(
                                 modifier = Modifier.padding(8.dp),
                                 horizontalAlignment = Alignment.CenterHorizontally
                             ) {
-                                Text("SLOT ${slotIdx + 1}", style = MaterialTheme.typography.labelSmall, color = MutedSlateText)
+                                Text("SLOT ${slotIdx + 1}", style = MaterialTheme.typography.labelSmall, color = TextMutedOnDark)
                                 BossMonsterAvatar(boss = boss, modifier = Modifier.size(46.dp))
                                 Text(
                                     text = boss.name,
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = DeepNavyInk,
+                                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                    color = TextOnDark,
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis
                                 )
-                                Text("Lv.$lvl", style = MaterialTheme.typography.labelSmall, color = EcoEmeraldDark)
+                                Text("Lv.$lvl", style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.ExtraBold), color = EcoEmeraldBright)
                             }
                         }
                     }
@@ -143,10 +157,18 @@ fun BossCollectionScreen(
                 FilterChip(
                     selected = selected,
                     onClick = { selectedFilter = key },
-                    label = { Text(label, style = MaterialTheme.typography.labelMedium) },
+                    label = { Text(label, style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold)) },
                     colors = FilterChipDefaults.filterChipColors(
+                        containerColor = DarkSurfaceCard,
+                        labelColor = TextMutedOnDark,
                         selectedContainerColor = SaffronGold,
                         selectedLabelColor = DeepNavyInk
+                    ),
+                    border = FilterChipDefaults.filterChipBorder(
+                        enabled = true,
+                        selected = selected,
+                        borderColor = DarkBorderSubtle,
+                        selectedBorderColor = GlowBeamGold
                     )
                 )
             }
@@ -186,7 +208,7 @@ fun BossCollectionScreen(
 
         ModalBottomSheet(
             onDismissRequest = { inspectedBoss = null },
-            containerColor = SurfaceWhite
+            containerColor = DarkSurfaceCard
         ) {
             Column(
                 modifier = Modifier
@@ -200,7 +222,7 @@ fun BossCollectionScreen(
                         modifier = Modifier
                             .size(82.dp)
                             .clip(RoundedCornerShape(18.dp))
-                            .background(boss.bodyColor.copy(alpha = 0.16f))
+                            .background(boss.bodyColor.copy(alpha = 0.22f))
                             .border(2.5.dp, boss.rarity.frameColor, RoundedCornerShape(18.dp)),
                         contentAlignment = Alignment.Center
                     ) {
@@ -210,14 +232,14 @@ fun BossCollectionScreen(
                     Column(modifier = Modifier.weight(1f)) {
                         Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
                             RarityChip(boss.rarity)
-                            Text("Arena ${boss.arenaId}", style = MaterialTheme.typography.labelSmall, color = MutedSlateText)
+                            Text("Arena ${boss.arenaId}", style = MaterialTheme.typography.labelSmall, color = TextMutedOnDark)
                         }
-                        Text(boss.name, style = MaterialTheme.typography.headlineMedium, color = DeepNavyInk)
-                        Text(boss.title, style = MaterialTheme.typography.bodyMedium, color = MutedSlateText)
+                        Text(boss.name, style = MaterialTheme.typography.headlineMedium, color = TextOnDark)
+                        Text(boss.title, style = MaterialTheme.typography.bodyMedium, color = TextMutedOnDark)
                         Text(
                             text = if (unlocked) "Level $lvl  •  $copies/$neededCopies copies" else "Locked — Win in Arena ${boss.arenaId}+ to capture",
                             style = MaterialTheme.typography.labelMedium,
-                            color = if (unlocked) EcoEmeraldDark else CarthageCoral
+                            color = if (unlocked) EcoEmeraldBright else BossHpRedTop
                         )
                     }
                 }
@@ -226,21 +248,21 @@ fun BossCollectionScreen(
                 Surface(
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(16.dp),
-                    color = SurfaceSoftBlue,
-                    border = BorderStroke(1.5.dp, DeepNavyInk)
+                    color = DarkSurfaceElevated,
+                    border = BorderStroke(1.5.dp, DarkBorderSubtle)
                 ) {
                     Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Text("ACTIVE SKILL: ${boss.abilityName}", style = MaterialTheme.typography.titleSmall, color = SidiCobalt)
-                        Text(boss.abilityDescription, style = MaterialTheme.typography.bodyMedium, color = DeepNavyInk)
+                        Text("ACTIVE SKILL: ${boss.abilityName}", style = MaterialTheme.typography.titleSmall, color = SaffronGold)
+                        Text(boss.abilityDescription, style = MaterialTheme.typography.bodyMedium, color = TextOnDark)
                         Text(
                             text = "Power: ${boss.abilityDamageAtLevel(lvl.coerceAtLeast(1))} DMG  •  +${boss.tileBonusPercentAtLevel(lvl.coerceAtLeast(1))}% on ${boss.preferredWaste.displayName}s",
                             style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
-                            color = EcoEmeraldDark
+                            color = EcoEmeraldBright
                         )
                     }
                 }
 
-                Text(boss.lore, style = MaterialTheme.typography.bodyMedium, color = MutedSlateText)
+                Text(boss.lore, style = MaterialTheme.typography.bodyMedium, color = TextMutedOnDark)
 
                 // Upgrade CTA
                 if (unlocked) {
@@ -254,7 +276,7 @@ fun BossCollectionScreen(
                     )
 
                     // Equip into Slot 1 / 2 / 3
-                    Text("Equip into Eco-Deck Slot:", style = MaterialTheme.typography.labelMedium, color = DeepNavyInk)
+                    Text("Equip into Eco-Deck Slot:", style = MaterialTheme.typography.labelMedium, color = TextOnDark)
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -271,12 +293,12 @@ fun BossCollectionScreen(
                                     .height(48.dp)
                                     .testTag("equip_slot_$slot"),
                                 shape = RoundedCornerShape(14.dp),
-                                border = BorderStroke(2.dp, if (isHere) EcoEmerald else SidiCobalt)
+                                border = BorderStroke(2.dp, if (isHere) EcoEmeraldBright else CeramicBlueTop)
                             ) {
                                 Text(
                                     text = if (isHere) "In Slot ${slot + 1}" else "Slot ${slot + 1}",
                                     style = MaterialTheme.typography.labelMedium,
-                                    color = if (isHere) EcoEmeraldDark else SidiCobalt
+                                    color = if (isHere) EcoEmeraldBright else CeramicBlueTop
                                 )
                             }
                         }

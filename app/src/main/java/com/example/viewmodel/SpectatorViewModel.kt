@@ -289,9 +289,8 @@ class SpectatorViewModel(
     fun stopWatching() {
         liveJob?.cancel()
         replayJob?.cancel()
-        activeLiveMatchId?.let { id ->
-            viewModelScope.launch { repository.adjustSpectatorCount(id, -1L) }
-        }
+        // Fire-and-forget: must also work from onCleared(), when viewModelScope is already cancelled.
+        activeLiveMatchId?.let { id -> repository.adjustSpectatorCountDetached(id, -1L) }
         activeLiveMatchId = null
         loadedReplay = null
     }

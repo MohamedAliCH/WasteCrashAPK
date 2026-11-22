@@ -23,6 +23,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
@@ -42,6 +43,8 @@ import com.example.engine.GridPos
 import com.example.engine.SessionSyncStatus
 import com.example.model.GameCatalog
 import com.example.ui.components.BossMonsterAvatar
+import com.example.ui.components.EnemyStage
+import com.example.ui.components.EnvironmentScene
 import com.example.ui.components.Match3BoardGrid
 import com.example.ui.theme.*
 import kotlinx.coroutines.delay
@@ -79,12 +82,11 @@ fun BattleScreen(
         }
     }
 
-    // Smooth real-time environmental pollution overlay dissolving as pollutionLevel drops 1.0 -> 0.0
-    val pollutionAlpha by animateFloatAsState(
-        targetValue = (local.pollutionLevel * 0.76f).coerceIn(0f, 0.76f),
-        animationSpec = tween(420),
-        label = "pollutionAlpha"
-    )
+    LaunchedEffect(state.invalidSwapToken) {
+        if (state.invalidSwapToken > 0L) {
+            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+        }
+    }
 
     val mins = state.secondsRemaining / 60
     val secs = state.secondsRemaining % 60
@@ -95,7 +97,7 @@ fun BattleScreen(
             .fillMaxSize()
             .background(
                 Brush.verticalGradient(
-                    listOf(Color(0xFF0E2954), Color(0xFF1A3A63), Color(0xFFCFA572))
+                    listOf(Color(0xFF061024), Color(0xFF0C2046), Color(0xFF050D1E))
                 )
             )
             .windowInsetsPadding(WindowInsets.safeDrawing)
@@ -261,31 +263,20 @@ fun BattleScreen(
                 modifier = Modifier
                     .fillMaxWidth()
                     .weight(1f)
-                    .shadow(8.dp, RoundedCornerShape(22.dp))
+                    .shadow(10.dp, RoundedCornerShape(22.dp))
                     .clip(RoundedCornerShape(22.dp))
-                    .border(3.dp, SandBoardBorder, RoundedCornerShape(22.dp))
+                    .border(
+                        2.5.dp,
+                        Brush.linearGradient(listOf(GlowBeamGold, SaffronGold, CeramicBlueTop)),
+                        RoundedCornerShape(22.dp)
+                    )
             ) {
-                // Iconic Tunisian Landmark Artwork
-                Image(
-                    painter = painterResource(id = arena.bannerRes),
-                    contentDescription = place.name,
-                    contentScale = ContentScale.Crop,
+                // The place reacts to the fight: cartoon + litter while polluted, real photo once purified
+                EnvironmentScene(
+                    place = place,
+                    pollution = local.pollutionLevel,
+                    purified = local.bossHp <= 0 || (state.isFinished && state.wonMatch),
                     modifier = Modifier.fillMaxSize()
-                )
-
-                // Dynamic Real-Time Pollution Smog & Grime Overlay (fades away cleanly as you match!)
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .background(
-                            Brush.verticalGradient(
-                                listOf(
-                                    Color(0xFF2E271E).copy(alpha = pollutionAlpha),
-                                    Color(0xFF42372A).copy(alpha = pollutionAlpha * 0.85f),
-                                    Color(0xFF211C15).copy(alpha = pollutionAlpha * 0.95f)
-                                )
-                            )
-                        )
                 )
 
                 // Radiant Golden-White Energy Beams + Starburst Impact Sparks (grid_58768252.jpg style)
@@ -321,13 +312,17 @@ fun BattleScreen(
                                 strokeWidth = if (beam.isCritical) 7f else 4.5f,
                                 cap = StrokeCap.Round
                             )
-                            // Ascending glowing projectile orb
-                            val orbPos = Offset(
-                                x = start.x + (bossCenter.x - start.x) * 0.62f,
-                                y = start.y + (bossCenter.y - start.y) * 0.62f
-                            )
-                            drawCircle(color = GlowBeamGold, radius = 15f, center = orbPos)
-                            drawCircle(color = GlowBeamCore, radius = 9f, center = orbPos)
+                            // 3 staggered glowing orbs rising along the beam path into the Boss
+                            listOf(0.26f, 0.52f, 0.78f).forEachIndexed { idx, t ->
+                                val orbPos = Offset(
+                                    x = start.x + (bossCenter.x - start.x) * t,
+                                    y = start.y + (bossCenter.y - start.y) * t
+                                )
+                                val outerR = if (idx == 1) 15f else 11f
+                                val innerR = if (idx == 1) 9f else 6f
+                                drawCircle(color = GlowBeamGold, radius = outerR, center = orbPos)
+                                drawCircle(color = GlowBeamCore, radius = innerR, center = orbPos)
+                            }
                         }
 
                         // Starburst impact flare directly on the Boss when struck!
@@ -401,81 +396,31 @@ fun BattleScreen(
                     }
                 }
 
-                // Center Enemy (Mini-Boss Wave 1/2 -> Shared Boss) + Sleek HP Bar (grid_58768252.jpg style)
-                Column(
+                // Center enemies: mini trash monsters of waves 1-2, then the shared Boss
+                EnemyStage(
+                    waveIndex = local.waveIndex,
+                    mobs = local.waveMobs,
+                    boss = sharedBoss,
+                    bossHp = local.bossHp,
+                    bossMaxHp = local.bossMaxHp,
+                    hitFlash = isFlashing,
+                    defeatedToken = state.mobDefeatedToken,
                     modifier = Modifier
                         .align(Alignment.Center)
-                        .padding(top = 14.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-                    val isBossStage = local.waveIndex >= 3
-                    val enemyName = if (isBossStage) sharedBoss.name else "Sludge Wave ${local.waveIndex}"
-                    val enemyHp = if (isBossStage) local.bossHp else local.currentEnemyHp
-                    val enemyMax = if (isBossStage) local.bossMaxHp else local.currentEnemyMaxHp
+                        .padding(top = 14.dp)
+                )
 
-                    BossMonsterAvatar(
-                        boss = sharedBoss,
-                        hitFlash = isFlashing,
-                        isMiniTrashWave = !isBossStage,
-                        waveIndex = local.waveIndex,
-                        modifier = Modifier.size(if (isBossStage) 114.dp else 94.dp)
-                    )
-
-                    Spacer(Modifier.height(2.dp))
-
-                    // Glossy HP Bar with "HP" prefix just like grid_58768252.jpg
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(50))
-                            .background(DeepNavyInk.copy(alpha = 0.84f))
-                            .border(1.5.dp, if (isBossStage) SaffronGold else Color.White.copy(alpha = 0.8f), RoundedCornerShape(50))
-                            .padding(horizontal = 10.dp, vertical = 4.dp)
-                    ) {
-                        Text(
-                            text = "HP",
-                            style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.ExtraBold),
-                            color = Color.White
-                        )
-                        val hpFrac = (enemyHp.toFloat() / enemyMax.coerceAtLeast(1).toFloat()).coerceIn(0f, 1f)
-                        Box(
-                            modifier = Modifier
-                                .width(156.dp)
-                                .height(15.dp)
-                                .clip(RoundedCornerShape(50))
-                                .background(BossHpTrack)
-                                .border(1.5.dp, Color.White.copy(alpha = 0.85f), RoundedCornerShape(50))
-                        ) {
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxHeight()
-                                    .fillMaxWidth(hpFrac)
-                                    .background(
-                                        Brush.verticalGradient(
-                                            if (isBossStage) listOf(BossHpRedTop, BossHpRedBottom)
-                                            else listOf(SaffronGold, SaharanAmber)
-                                        )
-                                    )
-                            )
-                            Text(
-                                text = "$enemyName • $enemyHp",
-                                style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp, fontWeight = FontWeight.ExtraBold),
-                                color = Color.White,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                                modifier = Modifier.align(Alignment.Center)
-                            )
-                        }
-                    }
-                }
-
-                // Floating Combo / Damage Pop-Up Banner
+                // Floating Combo / Damage Pop-Up Banner with spring pop-in
                 if (state.comboBannerText.isNotBlank()) {
+                    val comboScale = remember(state.hitFlashToken) { Animatable(0.65f) }
+                    LaunchedEffect(state.hitFlashToken) {
+                        comboScale.animateTo(1f, spring(dampingRatio = 0.52f, stiffness = 580f))
+                    }
                     Surface(
                         modifier = Modifier
                             .align(Alignment.BottomCenter)
-                            .padding(bottom = 6.dp),
+                            .padding(bottom = 6.dp)
+                            .scale(comboScale.value),
                         shape = RoundedCornerShape(50),
                         color = SaffronGold,
                         border = BorderStroke(2.dp, DeepNavyInk),
@@ -630,12 +575,17 @@ fun BattleScreen(
                 }
             }
 
-            // 4. LOWER WARM TUNISIAN SANDSTONE 7x7 MATCH-3 GRID (Unlimited Moves Speed Race)
+            // 4. LOWER OBSIDIAN-GOLD 7x7 MATCH-3 GRID (Unlimited Moves Speed Race)
             Match3BoardGrid(
                 board = local.board,
                 selectedTile = state.selectedTile,
                 interactive = true,
-                useSandstoneTheme = true,
+                useSandstoneTheme = false,
+                invalidSwapPair = state.invalidSwapPair,
+                invalidSwapToken = state.invalidSwapToken,
+                popBurstTiles = state.popBurstTiles,
+                popBurstToken = state.popBurstToken,
+                hintPair = state.hintPair,
                 onTileTap = { pos ->
                     haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                     onTileTap(pos)
@@ -654,16 +604,17 @@ fun BattleScreen(
     if (showQuitDialog) {
         AlertDialog(
             onDismissRequest = { showQuitDialog = false },
-            title = { Text("Leave 1v1 Battle?", style = MaterialTheme.typography.titleLarge) },
-            text = { Text("Leaving now ends your speed race and returns to the Battle Hub.") },
+            containerColor = DarkSurfaceCard,
+            title = { Text("Leave 1v1 Battle?", style = MaterialTheme.typography.titleLarge, color = TextOnDark) },
+            text = { Text("Leaving now ends your speed race and returns to the Battle Hub.", color = TextMutedOnDark) },
             confirmButton = {
                 TextButton(onClick = {
                     showQuitDialog = false
                     onForfeit()
-                }) { Text("Leave", color = CarthageCoral) }
+                }) { Text("Leave", color = BossHpRedTop) }
             },
             dismissButton = {
-                TextButton(onClick = { showQuitDialog = false }) { Text("Keep Racing") }
+                TextButton(onClick = { showQuitDialog = false }) { Text("Keep Racing", color = CeramicBlueTop) }
             }
         )
     }

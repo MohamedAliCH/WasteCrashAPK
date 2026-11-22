@@ -25,11 +25,18 @@ val CarthageCoralDark = Color(0xFFA71D1A)
 val SaharanAmber = Color(0xFFF57C00)
 
 // Surfaces & Cartoon Ink Outlines
-val LimestoneBg = Color(0xFFEFF6FF)
-val SurfaceWhite = Color(0xFFFFFFFF)
-val SurfaceSoftBlue = Color(0xFFE1EEFF)
+val DarkBgPrimary = Color(0xFF071124)
+val DarkSurfaceCard = Color(0xFF102142)
+val DarkSurfaceElevated = Color(0xFF18305C)
+val DarkBorderSubtle = Color(0xFF2B4D8A)
+val TextOnDark = Color(0xFFF3F7FF)
+val TextMutedOnDark = Color(0xFF9BB4DE)
+
+val LimestoneBg = DarkBgPrimary
+val SurfaceWhite = DarkSurfaceCard
+val SurfaceSoftBlue = DarkSurfaceElevated
 val DeepNavyInk = Color(0xFF0E2447)
-val MutedSlateText = Color(0xFF476082)
+val MutedSlateText = TextMutedOnDark
 val BattleBoardDark = Color(0xFF0B1B36)
 val BattleBoardCell = Color(0xFF13294E)
 val BattleBoardCellAlt = Color(0xFF17315C)

@@ -9,9 +9,11 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.EmojiEvents
 import androidx.compose.material.icons.filled.Place
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Wifi
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
@@ -19,6 +21,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -47,13 +50,22 @@ fun MatchmakingRouletteScreen(
 
     val infiniteTransition = rememberInfiniteTransition(label = "radar")
     val pulse by infiniteTransition.animateFloat(
-        initialValue = 0.93f,
-        targetValue = 1.07f,
+        initialValue = 0.94f,
+        targetValue = 1.06f,
         animationSpec = infiniteRepeatable(
-            animation = tween(680, easing = FastOutSlowInEasing),
+            animation = tween(720, easing = FastOutSlowInEasing),
             repeatMode = RepeatMode.Reverse
         ),
         label = "pulse"
+    )
+    val orbitAngle by infiniteTransition.animateFloat(
+        initialValue = 0f,
+        targetValue = 360f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(4200, easing = LinearEasing),
+            repeatMode = RepeatMode.Restart
+        ),
+        label = "orbit"
     )
 
     Box(
@@ -61,7 +73,7 @@ fun MatchmakingRouletteScreen(
             .fillMaxSize()
             .background(
                 Brush.verticalGradient(
-                    listOf(CeramicBlueLip, BattleBoardDark, Color(0xFF061024))
+                    listOf(Color(0xFF0A1B3D), Color(0xFF071124), Color(0xFF040914))
                 )
             )
             .windowInsetsPadding(WindowInsets.safeDrawing)
@@ -122,22 +134,53 @@ fun MatchmakingRouletteScreen(
                     verticalArrangement = Arrangement.spacedBy(14.dp)
                 ) {
                     Box(
-                        modifier = Modifier
-                            .size(176.dp)
-                            .scale(pulse)
-                            .clip(CircleShape)
-                            .background(CeramicBlueBottom.copy(alpha = 0.30f))
-                            .border(4.dp, SaffronGold, CircleShape),
+                        modifier = Modifier.size(204.dp),
                         contentAlignment = Alignment.Center
                     ) {
-                        Image(
-                            painter = painterResource(id = arena.bannerRes),
-                            contentDescription = arena.name,
-                            contentScale = ContentScale.Crop,
+                        Box(
                             modifier = Modifier
-                                .size(142.dp)
-                                .clip(CircleShape)
+                                .size(200.dp)
+                                .rotate(orbitAngle)
+                                .border(
+                                    width = 3.dp,
+                                    brush = Brush.sweepGradient(
+                                        listOf(
+                                            SaffronGold,
+                                            Color.Transparent,
+                                            CeramicBlueTop,
+                                            Color.Transparent,
+                                            SaffronGold
+                                        )
+                                    ),
+                                    shape = CircleShape
+                                )
                         )
+                        Box(
+                            modifier = Modifier
+                                .size(172.dp)
+                                .scale(pulse)
+                                .clip(CircleShape)
+                                .background(
+                                    Brush.radialGradient(
+                                        listOf(SaffronGold.copy(alpha = 0.25f), DarkSurfaceCard)
+                                    )
+                                )
+                                .border(
+                                    width = 3.5.dp,
+                                    brush = Brush.linearGradient(listOf(GlowBeamGold, SaffronGold, SaffronGoldDark)),
+                                    shape = CircleShape
+                                ),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Image(
+                                painter = painterResource(id = arena.bannerRes),
+                                contentDescription = arena.name,
+                                contentScale = ContentScale.Crop,
+                                modifier = Modifier
+                                    .size(144.dp)
+                                    .clip(CircleShape)
+                            )
+                        }
                     }
 
                     Text(
@@ -217,55 +260,97 @@ fun MatchmakingRouletteScreen(
                         )
                     }
 
-                    // Place Roulette Wheel Card
+                    // Luxury Gold-Bezel Tunisia Place Roulette Card
                     Surface(
                         modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(22.dp),
-                        color = SurfaceWhite,
-                        border = BorderStroke(3.dp, SaffronGold)
+                        shape = RoundedCornerShape(24.dp),
+                        color = DarkSurfaceCard,
+                        border = BorderStroke(
+                            3.dp,
+                            Brush.linearGradient(listOf(GlowBeamGold, SaffronGold, SaffronGoldDark))
+                        ),
+                        shadowElevation = 14.dp
                     ) {
                         Column(
-                            modifier = Modifier.padding(14.dp),
+                            modifier = Modifier
+                                .background(
+                                    Brush.verticalGradient(
+                                        listOf(Color(0xFF142952), Color(0xFF0A152C))
+                                    )
+                                )
+                                .padding(14.dp),
                             horizontalAlignment = Alignment.CenterHorizontally
                         ) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(Icons.Default.Place, contentDescription = null, tint = SidiCobalt, modifier = Modifier.size(20.dp))
-                                Spacer(Modifier.width(6.dp))
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Icon(Icons.Default.AutoAwesome, contentDescription = null, tint = SaffronGold, modifier = Modifier.size(18.dp))
                                 Text(
                                     text = "TUNISIA PLACE ROULETTE",
-                                    style = MaterialTheme.typography.titleMedium,
-                                    color = DeepNavyInk
+                                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.ExtraBold),
+                                    color = GlowBeamGold
                                 )
+                                Icon(Icons.Default.AutoAwesome, contentDescription = null, tint = SaffronGold, modifier = Modifier.size(18.dp))
                             }
-                            Spacer(Modifier.height(8.dp))
+                            Spacer(Modifier.height(10.dp))
 
                             arena.places.forEachIndexed { idx, place ->
                                 val isHighlighted = idx == state.rouletteHighlightIndex
-                                Surface(
+                                Box(
                                     modifier = Modifier
                                         .fillMaxWidth()
-                                        .padding(vertical = 3.dp),
-                                    shape = RoundedCornerShape(12.dp),
-                                    color = if (isHighlighted) SaffronGold else SurfaceSoftBlue,
-                                    border = BorderStroke(
-                                        width = if (isHighlighted) 2.5.dp else 1.dp,
-                                        color = if (isHighlighted) DeepNavyInk else Color.Transparent
-                                    )
+                                        .padding(vertical = 3.5.dp)
+                                        .scale(if (isHighlighted) 1.02f else 1f)
+                                        .clip(RoundedCornerShape(14.dp))
+                                        .background(
+                                            if (isHighlighted) {
+                                                Brush.horizontalGradient(listOf(GlowBeamGold, SaffronGold, GlowBeamOrange))
+                                            } else {
+                                                Brush.horizontalGradient(listOf(DarkSurfaceElevated, Color(0xFF112346)))
+                                            }
+                                        )
+                                        .border(
+                                            width = if (isHighlighted) 2.dp else 1.dp,
+                                            color = if (isHighlighted) Color.White else DarkBorderSubtle,
+                                            shape = RoundedCornerShape(14.dp)
+                                        )
                                 ) {
                                     Row(
-                                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(horizontal = 12.dp, vertical = 9.dp),
                                         horizontalArrangement = Arrangement.SpaceBetween,
                                         verticalAlignment = Alignment.CenterVertically
                                     ) {
-                                        Text(
-                                            text = place.name,
-                                            style = MaterialTheme.typography.titleSmall,
-                                            color = DeepNavyInk
-                                        )
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            if (isHighlighted) {
+                                                Icon(
+                                                    imageVector = Icons.Default.PlayArrow,
+                                                    contentDescription = null,
+                                                    tint = DeepNavyInk,
+                                                    modifier = Modifier.size(18.dp)
+                                                )
+                                                Spacer(Modifier.width(4.dp))
+                                            } else {
+                                                Icon(
+                                                    imageVector = Icons.Default.Place,
+                                                    contentDescription = null,
+                                                    tint = CeramicBlueTop,
+                                                    modifier = Modifier.size(15.dp)
+                                                )
+                                                Spacer(Modifier.width(6.dp))
+                                            }
+                                            Text(
+                                                text = place.name,
+                                                style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.ExtraBold),
+                                                color = if (isHighlighted) DeepNavyInk else TextOnDark
+                                            )
+                                        }
                                         Text(
                                             text = place.regionTag,
-                                            style = MaterialTheme.typography.labelSmall,
-                                            color = if (isHighlighted) DeepNavyInk else MutedSlateText
+                                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                            color = if (isHighlighted) DeepNavyInk.copy(alpha = 0.85f) else TextMutedOnDark
                                         )
                                     }
                                 }

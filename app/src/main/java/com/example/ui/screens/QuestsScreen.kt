@@ -1,5 +1,6 @@
 package com.example.ui.screens
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -7,8 +8,10 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -33,8 +36,13 @@ fun QuestsScreen(
     profile: UserProfile,
     claimedOutcome: QuestClaimOutcome?,
     onClaimQuest: (QuestDefinition) -> Unit,
-    onDismissClaimOutcome: () -> Unit
+    onDismissClaimOutcome: () -> Unit,
+    onBack: (() -> Unit)? = null
 ) {
+    if (onBack != null) {
+        BackHandler(onBack = onBack)
+    }
+
     var selectedCategory by remember { mutableStateOf(QuestCategory.DAILY) }
 
     val quests = remember(selectedCategory) {
@@ -55,6 +63,12 @@ fun QuestsScreen(
     Column(
         modifier = Modifier
             .fillMaxSize()
+            .background(
+                Brush.verticalGradient(
+                    listOf(Color(0xFF0C1E42), DarkBgPrimary, Color(0xFF050D1D))
+                )
+            )
+            .then(if (onBack != null) Modifier.windowInsetsPadding(WindowInsets.safeDrawing) else Modifier)
             .padding(horizontal = 16.dp, vertical = 10.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
@@ -64,9 +78,29 @@ fun QuestsScreen(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Column {
-                Text("Quests & Challenges", style = MaterialTheme.typography.headlineMedium, color = DeepNavyInk)
-                Text("Earn Eco-Coins & Boss Cards every battle", style = MaterialTheme.typography.labelMedium, color = MutedSlateText)
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+                if (onBack != null) {
+                    IconButton(
+                        onClick = onBack,
+                        modifier = Modifier
+                            .size(42.dp)
+                            .clip(CircleShape)
+                            .background(DarkSurfaceCard)
+                            .border(1.5.dp, DarkBorderSubtle, CircleShape)
+                            .testTag("quests_back_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = "Back",
+                            tint = TextOnDark
+                        )
+                    }
+                    Spacer(Modifier.width(10.dp))
+                }
+                Column {
+                    Text("Quests & Challenges", style = MaterialTheme.typography.headlineMedium.copy(fontWeight = FontWeight.ExtraBold), color = TextOnDark)
+                    Text("Earn Eco-Coins & Boss Cards every battle", style = MaterialTheme.typography.labelMedium, color = TextMutedOnDark)
+                }
             }
             StatPill(
                 value = "${profile.ecoCoins}",
@@ -78,12 +112,14 @@ fun QuestsScreen(
         // Daily Reset Banner
         Surface(
             modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(18.dp),
-            color = SidiCobalt,
-            border = BorderStroke(2.5.dp, DeepNavyInk)
+            shape = RoundedCornerShape(20.dp),
+            color = DarkSurfaceCard,
+            border = BorderStroke(1.8.dp, SaffronGold.copy(alpha = 0.7f))
         ) {
             Row(
-                modifier = Modifier.padding(14.dp),
+                modifier = Modifier
+                    .background(Brush.horizontalGradient(listOf(Color(0xFF173268), DarkSurfaceCard)))
+                    .padding(14.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
@@ -91,8 +127,8 @@ fun QuestsScreen(
                     Icon(Icons.Default.Schedule, contentDescription = null, tint = SaffronGold, modifier = Modifier.size(24.dp))
                     Spacer(Modifier.width(10.dp))
                     Column {
-                        Text("Active Cycle: ${profile.dailyQuestSeedDate}", style = MaterialTheme.typography.titleSmall, color = Color.White)
-                        Text("Progress updates automatically after every 1v1 match!", style = MaterialTheme.typography.labelSmall, color = SidiSkyLight)
+                        Text("Active Cycle: ${profile.dailyQuestSeedDate}", style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold), color = TextOnDark)
+                        Text("Progress updates automatically after every 1v1 match!", style = MaterialTheme.typography.labelSmall, color = TextMutedOnDark)
                     }
                 }
             }
@@ -103,8 +139,8 @@ fun QuestsScreen(
             modifier = Modifier
                 .fillMaxWidth()
                 .clip(RoundedCornerShape(16.dp))
-                .background(SurfaceSoftBlue)
-                .border(2.dp, DeepNavyInk, RoundedCornerShape(16.dp))
+                .background(DarkSurfaceCard)
+                .border(1.8.dp, DarkBorderSubtle, RoundedCornerShape(16.dp))
                 .padding(4.dp),
             horizontalArrangement = Arrangement.spacedBy(6.dp)
         ) {
@@ -149,9 +185,9 @@ fun QuestsScreen(
         val boss = GameCatalog.bossById(claimedOutcome.rewardedBossId)
         AlertDialog(
             onDismissRequest = onDismissClaimOutcome,
-            containerColor = SurfaceWhite,
+            containerColor = DarkSurfaceCard,
             title = {
-                Text("Quest Reward Claimed!", style = MaterialTheme.typography.headlineMedium, color = DeepNavyInk)
+                Text("Quest Reward Claimed!", style = MaterialTheme.typography.headlineMedium, color = TextOnDark)
             },
             text = {
                 Column(
@@ -163,7 +199,7 @@ fun QuestsScreen(
                         modifier = Modifier
                             .size(92.dp)
                             .clip(RoundedCornerShape(20.dp))
-                            .background(boss.bodyColor.copy(alpha = 0.18f))
+                            .background(boss.bodyColor.copy(alpha = 0.22f))
                             .border(3.dp, boss.rarity.frameColor, RoundedCornerShape(20.dp)),
                         contentAlignment = Alignment.Center
                     ) {
@@ -173,17 +209,17 @@ fun QuestsScreen(
                     Text(
                         text = "+${claimedOutcome.cardsAwarded}x ${boss.name} Cards",
                         style = MaterialTheme.typography.titleLarge,
-                        color = DeepNavyInk
+                        color = TextOnDark
                     )
                     Surface(
                         shape = RoundedCornerShape(50),
-                        color = EcoMintSoft,
-                        border = BorderStroke(1.5.dp, EcoEmeraldDark)
+                        color = EcoEmerald.copy(alpha = 0.22f),
+                        border = BorderStroke(1.5.dp, EcoEmeraldBright)
                     ) {
                         Text(
                             text = "+${claimedOutcome.coinsAwarded} Eco-Coins Added!",
                             style = MaterialTheme.typography.titleSmall,
-                            color = EcoEmeraldDark,
+                            color = EcoEmeraldBright,
                             modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp)
                         )
                     }
@@ -220,7 +256,7 @@ private fun QuestTabChip(
             Text(
                 text = label,
                 style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.ExtraBold),
-                color = DeepNavyInk
+                color = if (selected) DeepNavyInk else TextMutedOnDark
             )
         }
     }
@@ -241,12 +277,12 @@ private fun QuestCardItem(
             .fillMaxWidth()
             .testTag("quest_card_${quest.id}"),
         shape = RoundedCornerShape(20.dp),
-        color = if (claimed) Color(0xFFE9EFF7) else SurfaceWhite,
+        color = if (claimed) Color(0xFF0A162D) else DarkSurfaceCard,
         border = BorderStroke(
-            width = if (completed && !claimed) 3.dp else 2.dp,
-            color = if (completed && !claimed) EcoEmerald else DeepNavyInk
+            width = if (completed && !claimed) 2.5.dp else 1.5.dp,
+            color = if (completed && !claimed) EcoEmeraldBright else DarkBorderSubtle
         ),
-        shadowElevation = if (claimed) 1.dp else 4.dp
+        shadowElevation = if (claimed) 1.dp else 6.dp
     ) {
         Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Row(
@@ -256,11 +292,11 @@ private fun QuestCardItem(
             ) {
                 Column(modifier = Modifier.weight(1f)) {
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        Text(quest.title, style = MaterialTheme.typography.titleMedium, color = DeepNavyInk)
+                        Text(quest.title, style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.ExtraBold), color = TextOnDark)
                         RarityChip(quest.rewardRarity)
                     }
                     Spacer(Modifier.height(2.dp))
-                    Text(quest.description, style = MaterialTheme.typography.bodyMedium, color = MutedSlateText)
+                    Text(quest.description, style = MaterialTheme.typography.bodyMedium, color = TextMutedOnDark)
                 }
             }
 
@@ -270,8 +306,8 @@ private fun QuestCardItem(
                     .fillMaxWidth()
                     .height(18.dp)
                     .clip(RoundedCornerShape(50))
-                    .background(SurfaceSoftBlue)
-                    .border(1.5.dp, DeepNavyInk, RoundedCornerShape(50))
+                    .background(Color(0xFF061022))
+                    .border(1.2.dp, DarkBorderSubtle, RoundedCornerShape(50))
             ) {
                 Box(
                     modifier = Modifier
@@ -279,14 +315,14 @@ private fun QuestCardItem(
                         .fillMaxWidth(frac)
                         .background(
                             Brush.horizontalGradient(
-                                if (completed) listOf(EcoEmeraldBright, EcoEmerald) else listOf(SidiAzure, SidiCobalt)
+                                if (completed) listOf(EcoEmeraldBright, EcoEmerald) else listOf(CeramicBlueTop, SidiCobalt)
                             )
                         )
                 )
                 Text(
                     text = "$progress / ${quest.target}",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = if (frac > 0.45f) Color.White else DeepNavyInk,
+                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                    color = Color.White,
                     modifier = Modifier.align(Alignment.Center)
                 )
             }
@@ -298,18 +334,26 @@ private fun QuestCardItem(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Surface(shape = RoundedCornerShape(10.dp), color = EcoMintSoft) {
+                    Surface(
+                        shape = RoundedCornerShape(10.dp),
+                        color = EcoEmerald.copy(alpha = 0.20f),
+                        border = BorderStroke(1.dp, EcoEmeraldBright.copy(alpha = 0.6f))
+                    ) {
                         Row(modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Default.MonetizationOn, contentDescription = null, tint = EcoEmeraldDark, modifier = Modifier.size(15.dp))
+                            Icon(Icons.Default.MonetizationOn, contentDescription = null, tint = EcoEmeraldBright, modifier = Modifier.size(15.dp))
                             Spacer(Modifier.width(4.dp))
-                            Text("+${quest.coinReward}", style = MaterialTheme.typography.labelMedium, color = EcoEmeraldDark)
+                            Text("+${quest.coinReward}", style = MaterialTheme.typography.labelMedium, color = EcoEmeraldBright)
                         }
                     }
-                    Surface(shape = RoundedCornerShape(10.dp), color = SaffronCream) {
+                    Surface(
+                        shape = RoundedCornerShape(10.dp),
+                        color = SaffronGold.copy(alpha = 0.18f),
+                        border = BorderStroke(1.dp, SaffronGold.copy(alpha = 0.6f))
+                    ) {
                         Row(modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Default.Style, contentDescription = null, tint = SaffronGoldDark, modifier = Modifier.size(15.dp))
+                            Icon(Icons.Default.Style, contentDescription = null, tint = SaffronGold, modifier = Modifier.size(15.dp))
                             Spacer(Modifier.width(4.dp))
-                            Text("+${quest.cardRewardCount} ${quest.rewardRarity.label} Card", style = MaterialTheme.typography.labelMedium, color = DeepNavyInk)
+                            Text("+${quest.cardRewardCount} ${quest.rewardRarity.label} Card", style = MaterialTheme.typography.labelMedium, color = GlowBeamGold)
                         }
                     }
                 }
@@ -317,9 +361,9 @@ private fun QuestCardItem(
                 when {
                     claimed -> {
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Default.CheckCircle, contentDescription = "Claimed", tint = EcoEmeraldDark, modifier = Modifier.size(18.dp))
+                            Icon(Icons.Default.CheckCircle, contentDescription = "Claimed", tint = EcoEmeraldBright, modifier = Modifier.size(18.dp))
                             Spacer(Modifier.width(4.dp))
-                            Text("Claimed", style = MaterialTheme.typography.labelMedium, color = EcoEmeraldDark)
+                            Text("Claimed", style = MaterialTheme.typography.labelMedium, color = EcoEmeraldBright)
                         }
                     }
                     completed -> {
@@ -332,7 +376,7 @@ private fun QuestCardItem(
                         )
                     }
                     else -> {
-                        Text("In Progress", style = MaterialTheme.typography.labelSmall, color = MutedSlateText)
+                        Text("In Progress", style = MaterialTheme.typography.labelSmall, color = TextMutedOnDark)
                     }
                 }
             }

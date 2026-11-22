@@ -4,6 +4,7 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -34,13 +35,19 @@ import com.example.ui.theme.*
 
 @Composable
 fun ArenasTrophyRoadScreen(
-    profile: UserProfile
+    profile: UserProfile,
+    onOpenPlaceOnMap: (String) -> Unit = {}
 ) {
     val currentArena = GameCatalog.arenaForTrophies(profile.trophies)
 
     LazyColumn(
         modifier = Modifier
             .fillMaxSize()
+            .background(
+                Brush.verticalGradient(
+                    listOf(Color(0xFF0C1E42), DarkBgPrimary, Color(0xFF050D1D))
+                )
+            )
             .padding(horizontal = 16.dp),
         contentPadding = PaddingValues(vertical = 12.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
@@ -51,9 +58,9 @@ fun ArenasTrophyRoadScreen(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Column {
-                    Text("Tunisia Trophy Road", style = MaterialTheme.typography.headlineMedium, color = DeepNavyInk)
-                    Text("3 Environments • 15 Places • Cumulative Boss Pools", style = MaterialTheme.typography.labelMedium, color = MutedSlateText)
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("Tunisia Trophy Road", style = MaterialTheme.typography.headlineMedium.copy(fontWeight = FontWeight.ExtraBold), color = TextOnDark)
+                    Text("3 Environments • 15 Places • Cumulative Boss Pools", style = MaterialTheme.typography.labelMedium, color = TextMutedOnDark)
                 }
                 StatPill(
                     value = "${profile.trophies}",
@@ -63,7 +70,6 @@ fun ArenasTrophyRoadScreen(
             }
         }
 
-        // Display highest Arena at top (climbing road style) or Arena 0 -> 2 clearly ordered
         items(GameCatalog.arenas, key = { it.id }) { arena ->
             val unlocked = profile.trophies >= arena.minTrophies
             val isCurrent = arena.id == currentArena.id
@@ -71,7 +77,8 @@ fun ArenasTrophyRoadScreen(
                 arena = arena,
                 unlocked = unlocked,
                 isCurrent = isCurrent,
-                userTrophies = profile.trophies
+                userTrophies = profile.trophies,
+                onPlaceClick = onOpenPlaceOnMap
             )
         }
     }
@@ -82,7 +89,8 @@ private fun ArenaRoadCard(
     arena: ArenaDefinition,
     unlocked: Boolean,
     isCurrent: Boolean,
-    userTrophies: Int
+    userTrophies: Int,
+    onPlaceClick: (String) -> Unit
 ) {
     val arenaBosses = GameCatalog.bosses.filter { it.arenaId == arena.id }
     val cumulativeCount = GameCatalog.cumulativeBossPoolForArena(arena.id).size
@@ -90,12 +98,12 @@ private fun ArenaRoadCard(
     Surface(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(24.dp),
-        color = SurfaceWhite,
+        color = DarkSurfaceCard,
         border = BorderStroke(
-            width = if (isCurrent) 3.5.dp else 2.dp,
-            color = if (isCurrent) SaffronGold else if (unlocked) DeepNavyInk else Color(0xFF94A3B8)
+            width = if (isCurrent) 3.dp else 1.8.dp,
+            color = if (isCurrent) SaffronGold else DarkBorderSubtle
         ),
-        shadowElevation = if (isCurrent) 8.dp else 3.dp
+        shadowElevation = if (isCurrent) 10.dp else 4.dp
     ) {
         Column {
             // Environment Hero Banner
@@ -166,12 +174,16 @@ private fun ArenaRoadCard(
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 // 5 Tunisian Places List
-                Text("5 Roulette Locations:", style = MaterialTheme.typography.titleSmall, color = DeepNavyInk)
+                Text("5 Roulette Locations (Tap to view on Map):", style = MaterialTheme.typography.titleSmall, color = TextOnDark)
                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     arena.places.forEach { place ->
                         Surface(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(12.dp))
+                                .clickable { onPlaceClick(place.id) },
                             shape = RoundedCornerShape(12.dp),
-                            color = SurfaceSoftBlue
+                            color = DarkSurfaceElevated,
+                            border = BorderStroke(1.dp, DarkBorderSubtle.copy(alpha = 0.7f))
                         ) {
                             Row(
                                 modifier = Modifier
@@ -179,18 +191,18 @@ private fun ArenaRoadCard(
                                     .padding(horizontal = 10.dp, vertical = 7.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Icon(Icons.Default.Place, contentDescription = null, tint = arena.primaryColor, modifier = Modifier.size(16.dp))
+                                Icon(Icons.Default.Place, contentDescription = null, tint = SaffronGold, modifier = Modifier.size(16.dp))
                                 Spacer(Modifier.width(8.dp))
                                 Column(modifier = Modifier.weight(1f)) {
                                     Text(
                                         text = "${place.name} (${place.regionTag})",
-                                        style = MaterialTheme.typography.labelMedium,
-                                        color = DeepNavyInk
+                                        style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                                        color = TextOnDark
                                     )
                                     Text(
                                         text = place.ecoFact,
                                         style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Normal),
-                                        color = MutedSlateText
+                                        color = TextMutedOnDark
                                     )
                                 }
                             }
@@ -199,17 +211,17 @@ private fun ArenaRoadCard(
                 }
 
                 // Cumulative Boss Pool Preview
-                HorizontalDivider(color = SurfaceSoftBlue)
+                HorizontalDivider(color = DarkBorderSubtle.copy(alpha = 0.45f))
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text("New Unlockable Bosses (5):", style = MaterialTheme.typography.titleSmall, color = DeepNavyInk)
+                    Text("New Unlockable Bosses (5):", style = MaterialTheme.typography.titleSmall, color = TextOnDark)
                     Text(
                         text = "Active Pool: $cumulativeCount Bosses",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = SidiCobalt
+                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                        color = CeramicBlueTop
                     )
                 }
 
@@ -226,7 +238,7 @@ private fun ArenaRoadCard(
                                 modifier = Modifier
                                     .size(46.dp)
                                     .clip(CircleShape)
-                                    .background(boss.bodyColor.copy(alpha = 0.16f))
+                                    .background(boss.bodyColor.copy(alpha = 0.22f))
                                     .border(2.dp, boss.rarity.frameColor, CircleShape),
                                 contentAlignment = Alignment.Center
                             ) {
@@ -236,7 +248,7 @@ private fun ArenaRoadCard(
                             Text(
                                 text = boss.name.substringBefore("-"),
                                 style = MaterialTheme.typography.labelSmall,
-                                color = DeepNavyInk,
+                                color = TextOnDark,
                                 maxLines = 1
                             )
                         }
@@ -248,7 +260,7 @@ private fun ArenaRoadCard(
                     Text(
                         text = "Earn $missing more Trophies to unlock ${arena.name} & expand your Boss pool to $cumulativeCount Bosses!",
                         style = MaterialTheme.typography.labelMedium,
-                        color = SaharanAmber
+                        color = SaffronGold
                     )
                 }
             }

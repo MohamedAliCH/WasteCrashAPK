@@ -3,33 +3,33 @@ package com.example.ui.theme
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Shapes
-import androidx.compose.material3.lightColorScheme
+import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 
-private val WasteCrushColorScheme = lightColorScheme(
-    primary = SidiCobalt,
+private val WasteCrushColorScheme = darkColorScheme(
+    primary = CeramicBlueTop,
     onPrimary = Color.White,
-    primaryContainer = SidiSkyLight,
-    onPrimaryContainer = DeepNavyInk,
+    primaryContainer = DarkSurfaceElevated,
+    onPrimaryContainer = TextOnDark,
     secondary = EcoEmerald,
     onSecondary = Color.White,
-    secondaryContainer = EcoMintSoft,
-    onSecondaryContainer = DeepNavyInk,
+    secondaryContainer = EcoEmeraldDark,
+    onSecondaryContainer = TextOnDark,
     tertiary = SaffronGold,
     onTertiary = DeepNavyInk,
-    tertiaryContainer = SaffronCream,
-    onTertiaryContainer = DeepNavyInk,
+    tertiaryContainer = SaffronGoldDark,
+    onTertiaryContainer = Color.White,
     error = CarthageCoral,
     onError = Color.White,
-    background = LimestoneBg,
-    onBackground = DeepNavyInk,
-    surface = SurfaceWhite,
-    onSurface = DeepNavyInk,
-    surfaceVariant = SurfaceSoftBlue,
-    onSurfaceVariant = MutedSlateText,
-    outline = DeepNavyInk
+    background = DarkBgPrimary,
+    onBackground = TextOnDark,
+    surface = DarkSurfaceCard,
+    onSurface = TextOnDark,
+    surfaceVariant = DarkSurfaceElevated,
+    onSurfaceVariant = TextMutedOnDark,
+    outline = DarkBorderSubtle
 )
 
 val WasteCrushShapes = Shapes(

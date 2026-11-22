@@ -6,10 +6,13 @@ import com.example.model.*
 import com.google.firebase.firestore.FirebaseFirestoreException
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlin.random.Random
 
 enum class SessionSyncStatus {
@@ -29,15 +32,26 @@ data class EnergyBeamEffect(
     val createdAtMs: Long
 )
 
+/** One mini trash monster of the current wave. */
+data class MobState(
+    val id: String,
+    val hp: Int,
+    val maxHp: Int
+) {
+    val alive: Boolean get() = hp > 0
+}
+
 data class PlayerBattleSnapshot(
     val uid: String = "",
     val name: String = "Challenger",
     val trophies: Int = 0,
     val deckBossIds: List<String> = listOf("boss_b1", "boss_b2", "boss_b3"),
     val deckBossLevels: List<Int> = listOf(1, 1, 1),
-    val board: List<List<BoardTile>> = Match3Engine.createInitialBoard(),
-    val boardFlat: List<Int> = Match3Engine.encodeBoardFlat(Match3Engine.createInitialBoard()),
-    val waveIndex: Int = 1, // 1 = Wave 1, 2 = Wave 2, 3 = Shared Boss
+    val board: List<List<BoardTile>> = Match3Engine.DEFAULT_BOARD,
+    val boardFlat: List<Int> = Match3Engine.DEFAULT_BOARD_FLAT,
+    val waveIndex: Int = 1, // 1 = Wave 1 (2 minis), 2 = Wave 2 (3 minis), 3 = Shared Boss
+    /** Mini monsters of the current wave (empty during the Boss stage). */
+    val waveMobs: List<MobState> = emptyList(),
     val currentEnemyHp: Int = 420,
     val currentEnemyMaxHp: Int = 420,
     val bossHp: Int = 1500,
@@ -83,7 +97,9 @@ data class GameSessionConfig(
     val opponentTrophies: Int,
     val opponentDeckIds: List<String>,
     val opponentDeckLevels: List<Int>,
-    val durationSec: Int = 90
+    val durationSec: Int = 90,
+    /** Mini mob ids for wave 1 and wave 2. Empty = derived from the match id (same for both players). */
+    val waves: List<List<String>> = emptyList()
 )
 
 data class GameSessionState(
@@ -102,16 +118,27 @@ data class GameSessionState(
     val syncStatus: SessionSyncStatus = SessionSyncStatus.IDLE,
     val lastCloudSyncMs: Long = 0L,
     val localPlayer: PlayerBattleSnapshot = PlayerBattleSnapshot(),
-    val opponentPlayer: PlayerBattleSnapshot = PlayerBattleSnapshot(
-        name = "Rival",
-        board = Match3Engine.createInitialBoard(Random(99))
-    ),
+    val opponentPlayer: PlayerBattleSnapshot = PlayerBattleSnapshot(name = "Rival"),
     val selectedTile: GridPos? = null,
+    val isBoardAnimating: Boolean = false,
+    val invalidSwapPair: Pair<GridPos, GridPos>? = null,
+    val invalidSwapToken: Long = 0L,
+    val popBurstTiles: List<Pair<GridPos, WasteType>> = emptyList(),
+    val popBurstToken: Long = 0L,
+    val hintPair: Pair<GridPos, GridPos>? = null,
+    val comboFlashLevel: Int = 0,
     val hitFlashToken: Long = 0L,
     val lastDamageDealt: Int = 0,
     val comboBannerText: String = "",
     val activeBeams: List<EnergyBeamEffect> = emptyList(),
     val showRivalPeek: Boolean = false,
+    /** Mini mob waves of this match (wave 1, wave 2). */
+    val waveMobIds: List<List<String>> = emptyList(),
+    /** Bumped every time a mini monster (or the Boss) is defeated, to drive the "purified" VFX. */
+    val mobDefeatedToken: Long = 0L,
+    val lastDefeatedName: String = "",
+    /** PvP: timer reached 00:00 and we are waiting for player 1's authoritative result. */
+    val awaitingResult: Boolean = false,
     // Quest & post-match telemetry
     val blueTilesMatched: Int = 0,
     val totalTilesMatched: Int = 0,
@@ -122,9 +149,157 @@ data class GameSessionState(
     val soundEnabled: Boolean = true
 )
 
+/** Pure wave/damage rules, kept separate from coroutines so they can be unit-tested. */
+object BattleRules {
+    const val WAVE1_BASE = 420
+    const val WAVE2_BASE = 580
+    /** Minis take x2 from their own material, so their HP pool is raised to keep match length. */
+    const val MINI_HP_SCALE = 1.3f
+    const val MINI_WEAKNESS_MULT = 2f
+    const val BOSS_WEAKNESS_MULT = 1.5f
+
+    fun waveTotalHp(wave: Int, arenaId: Int): Int = when (wave) {
+        1 -> ((WAVE1_BASE + arenaId * 90) * MINI_HP_SCALE).toInt()
+        else -> ((WAVE2_BASE + arenaId * 110) * MINI_HP_SCALE).toInt()
+    }
+
+    fun buildWave(ids: List<String>, totalHp: Int): List<MobState> {
+        if (ids.isEmpty()) return emptyList()
+        val weights = ids.map { GameCatalog.miniMobById(it).hpWeight }
+        val sum = weights.sum().coerceAtLeast(0.01f)
+        return ids.mapIndexed { i, id ->
+            val hp = (totalHp * weights[i] / sum).toInt().coerceAtLeast(1)
+            MobState(id, hp, hp)
+        }
+    }
+
+    fun totalPool(arenaId: Int, bossMaxHp: Int): Int =
+        waveTotalHp(1, arenaId) + waveTotalHp(2, arenaId) + bossMaxHp
+
+    /** The monster currently being hit: first alive mini, or the Boss. */
+    fun weaknessFor(waveIndex: Int, mobs: List<MobState>, boss: BossDefinition): Pair<WasteType, Float> {
+        if (waveIndex < 3) {
+            val target = mobs.firstOrNull { it.alive } ?: return boss.preferredWaste to 1f
+            return GameCatalog.miniMobById(target.id).weakness to MINI_WEAKNESS_MULT
+        }
+        return boss.preferredWaste to BOSS_WEAKNESS_MULT
+    }
+
+    /** Cleared tiles weighted by the current target's weakness. */
+    fun weightedCleared(counts: Map<WasteType, Int>, weakness: WasteType, mult: Float): Float =
+        counts.entries.sumOf { (t, n) -> (n * if (t == weakness) mult else 1f).toDouble() }.toFloat()
+
+    data class DamageOutcome(
+        val waveIndex: Int,
+        val mobs: List<MobState>,
+        val bossHp: Int,
+        val defeatedNames: List<String>,
+        val waveTransitioned: Boolean
+    )
+
+    /** Applies [damage] to the minis in order (overflow carries over), then to the Boss. */
+    fun applyDamage(
+        damage: Int,
+        waveIndex: Int,
+        mobs: List<MobState>,
+        bossHp: Int,
+        waves: List<List<String>>,
+        arenaId: Int,
+        bossName: String
+    ): DamageOutcome {
+        var wave = waveIndex
+        var current = mobs.toMutableList()
+        var boss = bossHp
+        var remaining = damage
+        val defeated = mutableListOf<String>()
+        var transitioned = false
+
+        while (remaining > 0 && wave < 3) {
+            val idx = current.indexOfFirst { it.alive }
+            if (idx < 0) {
+                wave++
+                transitioned = true
+                current = if (wave == 2) buildWave(waves.getOrElse(1) { emptyList() }, waveTotalHp(2, arenaId)).toMutableList()
+                else mutableListOf()
+                continue
+            }
+            val mob = current[idx]
+            val dealt = remaining.coerceAtMost(mob.hp)
+            current[idx] = mob.copy(hp = mob.hp - dealt)
+            remaining -= dealt
+            if (current[idx].hp <= 0) defeated += GameCatalog.miniMobById(mob.id).name
+        }
+        // A wave whose last mob just fell advances even if no damage is left over.
+        if (wave < 3 && current.none { it.alive }) {
+            wave++
+            transitioned = true
+            current = if (wave == 2) buildWave(waves.getOrElse(1) { emptyList() }, waveTotalHp(2, arenaId)).toMutableList()
+            else mutableListOf()
+        }
+        if (wave == 3 && remaining > 0) {
+            val before = boss
+            boss = (boss - remaining).coerceAtLeast(0)
+            if (before > 0 && boss == 0) defeated += bossName
+        }
+        return DamageOutcome(wave, current, boss, defeated, transitioned)
+    }
+
+    /** AI rival pacing: it plays roughly one move every 4 seconds (a bit faster in higher arenas). */
+    const val BOT_MOVE_CHANCE = 0.28f
+
+    data class BotTick(val board: List<List<BoardTile>>, val charges: List<Int>, val damage: Int, val abilityLabel: String?)
+
+    /** One second of the AI rival: maybe a move, maybe a charged Eco-Deck ability. */
+    fun botTick(
+        board: List<List<BoardTile>>,
+        skillCharges: List<Int>,
+        deckIds: List<String>,
+        deckLevels: List<Int>,
+        arenaId: Int,
+        random: Random
+    ): BotTick {
+        var b = board
+        var dmg = 0
+        val charges = skillCharges.toMutableList()
+        while (charges.size < 3) charges.add(0)
+        var label: String? = null
+
+        val move = Match3Engine.findAnyValidMove(b)
+        if (move != null && random.nextFloat() < BOT_MOVE_CHANCE + arenaId * 0.01f) {
+            val res = Match3Engine.attemptSwap(b, move.first, move.second, random)
+            if (res != null) {
+                b = res.newBoard
+                val avgLevel = deckLevels.average().toFloat().takeIf { !it.isNaN() }?.coerceAtLeast(1f) ?: 1f
+                dmg = (res.totalCleared * (14 + arenaId * 3) * (1f + (avgLevel - 1f) * 0.1f) * (1f + (res.comboCount - 1) * 0.2f)).toInt()
+                for (i in 0 until 3) charges[i] = (charges[i] + res.totalCleared * 3).coerceAtMost(100)
+            }
+        }
+        val readySlot = charges.indexOfFirst { it >= 100 }
+        if (readySlot >= 0) {
+            val bossDef = GameCatalog.bossById(deckIds.getOrElse(readySlot) { "boss_b1" })
+            val lvl = deckLevels.getOrElse(readySlot) { 1 }
+            b = Match3Engine.applyBossAbility(b, bossDef, random).newBoard
+            dmg += bossDef.abilityDamageAtLevel(lvl) / 3
+            charges[readySlot] = 0
+            label = "${bossDef.name}: ${bossDef.abilityName}"
+        }
+        return BotTick(b, charges, dmg, label)
+    }
+
+    /**
+     * Same answer on both clients for the same data: more damage wins; a tie goes to the
+     * higher clean-up %, then to the lexicographically smaller uid. Returns the winner uid.
+     */
+    fun timeoutWinner(p1: PlayerBattleSnapshot, p2: PlayerBattleSnapshot): String = when {
+        p1.totalDamage != p2.totalDamage -> if (p1.totalDamage > p2.totalDamage) p1.uid else p2.uid
+        p1.restorationPct != p2.restorationPct -> if (p1.restorationPct > p2.restorationPct) p1.uid else p2.uid
+        else -> minOf(p1.uid, p2.uid)
+    }
+}
+
 /**
- * Authoritative Firebase-backed 1v1 Battle Session Manager.
- * Handles Match-3 grid resolution, Eco-Deck charged abilities, wave-to-Boss progression,
+ * Firebase-backed 1v1 Battle Session Manager.
+ * Handles Match-3 grid resolution, Eco-Deck charged abilities, mini-mob waves -> shared Boss,
  * real-time environmental pollution clearing, rival synchronization via Firestore `liveMatches/{matchId}`,
  * Replay frame capture, and post-match Trophy/Coin/Boss/Quest persistence.
  */
@@ -140,17 +315,18 @@ class GameStateManager(
     private var timerLoopJob: Job? = null
     private var liveObserverJob: Job? = null
     private var throttledSyncJob: Job? = null
+    private var swapAnimJob: Job? = null
+    private var resultGraceJob: Job? = null
+    private var onFinished: (Boolean) -> Unit = {}
 
     private var beamCounter = 1L
     private var lastOutboundPushMs = 0L
     private var lastReplayRecordSec = -1
+    private var lastPlayerMoveMs = 0L
     private var pendingReplayNote = ""
 
     private val tilesMatchedByType = mutableMapOf<WasteType, Int>()
     private val recordedFrames = mutableListOf<ReplayFrame>()
-
-    private val wave1HpBase = 420
-    private val wave2HpBase = 580
 
     fun toggleSound() {
         val next = !_state.value.soundEnabled
@@ -168,58 +344,49 @@ class GameStateManager(
     ) {
         stopSession()
         activeProfile = config.profile
+        onFinished = onSessionFinished
         tilesMatchedByType.clear()
         recordedFrames.clear()
         lastOutboundPushMs = 0L
         lastReplayRecordSec = -1
+        lastPlayerMoveMs = System.currentTimeMillis()
         pendingReplayNote = ""
 
-        val wave1Hp = wave1HpBase + config.arena.id * 90
+        val arenaId = config.arena.id
+        val waves = config.waves.takeIf { it.size >= 2 } ?: GameCatalog.matchWaves(config.matchId, arenaId)
+        val wave1Total = BattleRules.waveTotalHp(1, arenaId)
         val myLevels = config.profile.equippedDeckIds.map { config.profile.bossLevels[it] ?: 1 }
-        val localFlat = Match3Engine.encodeBoardFlat(config.initialLocalBoard)
-        val oppFlat = Match3Engine.encodeBoardFlat(config.initialOpponentBoard)
         val now = System.currentTimeMillis()
 
-        val localSnapshot = PlayerBattleSnapshot(
-            uid = config.profile.userId,
-            name = config.profile.displayName,
-            trophies = config.profile.trophies,
-            deckBossIds = config.profile.equippedDeckIds,
-            deckBossLevels = myLevels,
-            board = config.initialLocalBoard,
-            boardFlat = localFlat,
-            waveIndex = 1,
-            currentEnemyHp = wave1Hp,
-            currentEnemyMaxHp = wave1Hp,
-            bossHp = config.sharedBoss.bossBattleHp,
-            bossMaxHp = config.sharedBoss.bossBattleHp,
-            totalDamage = 0,
-            pollutionLevel = 1.0f,
-            restorationPct = 0,
-            skillCharges = listOf(0, 0, 0),
-            lastAbilityText = "",
-            lastUpdatedMs = now
-        )
+        fun snapshot(
+            uid: String, name: String, trophies: Int, deckIds: List<String>, deckLevels: List<Int>, board: List<List<BoardTile>>
+        ): PlayerBattleSnapshot {
+            val mobs = BattleRules.buildWave(waves[0], wave1Total)
+            return PlayerBattleSnapshot(
+                uid = uid,
+                name = name,
+                trophies = trophies,
+                deckBossIds = deckIds,
+                deckBossLevels = deckLevels,
+                board = board,
+                boardFlat = Match3Engine.encodeBoardFlat(board),
+                waveIndex = 1,
+                waveMobs = mobs,
+                currentEnemyHp = mobs.sumOf { it.hp },
+                currentEnemyMaxHp = mobs.sumOf { it.maxHp },
+                bossHp = config.sharedBoss.bossBattleHp,
+                bossMaxHp = config.sharedBoss.bossBattleHp,
+                lastUpdatedMs = now
+            )
+        }
 
-        val oppSnapshot = PlayerBattleSnapshot(
-            uid = config.opponentUid,
-            name = config.opponentName,
-            trophies = config.opponentTrophies,
-            deckBossIds = config.opponentDeckIds,
-            deckBossLevels = config.opponentDeckLevels,
-            board = config.initialOpponentBoard,
-            boardFlat = oppFlat,
-            waveIndex = 1,
-            currentEnemyHp = wave1Hp,
-            currentEnemyMaxHp = wave1Hp,
-            bossHp = config.sharedBoss.bossBattleHp,
-            bossMaxHp = config.sharedBoss.bossBattleHp,
-            totalDamage = 0,
-            pollutionLevel = 1.0f,
-            restorationPct = 0,
-            skillCharges = listOf(0, 0, 0),
-            lastAbilityText = "",
-            lastUpdatedMs = now
+        val localSnapshot = snapshot(
+            config.profile.userId, config.profile.displayName, config.profile.trophies,
+            config.profile.equippedDeckIds, myLevels, config.initialLocalBoard
+        )
+        val oppSnapshot = snapshot(
+            config.opponentUid, config.opponentName, config.opponentTrophies,
+            config.opponentDeckIds, config.opponentDeckLevels, config.initialOpponentBoard
         )
 
         val isLocalFallback = config.matchId.startsWith("local_")
@@ -227,7 +394,7 @@ class GameStateManager(
             isActive = true,
             isFinished = false,
             matchId = config.matchId,
-            arenaId = config.arena.id,
+            arenaId = arenaId,
             placeId = config.place.id,
             sharedBossId = config.sharedBoss.id,
             amIPlayer1 = config.amIPlayer1,
@@ -239,35 +406,41 @@ class GameStateManager(
             lastCloudSyncMs = now,
             localPlayer = localSnapshot,
             opponentPlayer = oppSnapshot,
+            waveMobIds = waves,
             soundEnabled = soundPlayer.soundEnabled
         )
 
         recordReplayFrame("Battle started at ${config.place.name}! Shared Boss: ${config.sharedBoss.name}")
 
-        // 1. Start real-time Firestore listener for opponent grid, Boss HP, pollution level & spectators
-        observeRemoteMatchSession(config.matchId, config.amIPlayer1, config.isBotMatch, onSessionFinished)
+        // 1. Real-time Firestore listener for opponent grid, Boss HP, pollution level & spectators
+        observeRemoteMatchSession(config.matchId, config.amIPlayer1, config.isBotMatch)
 
-        // 2. Start authoritative 90-second battle timer, VFX cleanup, rival simulation & periodic sync
-        var oppWave1Hp = wave1Hp
-        var oppWave2Hp = wave2HpBase + config.arena.id * 110
+        // 2. Battle timer, VFX cleanup, rival simulation & periodic sync
+        var oppWave1Hp = wave1Total
+        var oppWave2Hp = BattleRules.waveTotalHp(2, arenaId)
 
         timerLoopJob = scope.launch {
             while (_state.value.isActive && !_state.value.isFinished) {
                 delay(1000L)
                 val s = _state.value
-                if (!s.isActive || s.isFinished) break
+                if (!s.isActive || s.isFinished || s.awaitingResult) break
 
                 val nextSec = (s.secondsRemaining - 1).coerceAtLeast(0)
                 val nowMs = System.currentTimeMillis()
                 val prunedBeams = s.activeBeams.filter { nowMs - it.createdAtMs < 700L }
+                val nextHint = if (s.hintPair == null && !s.isBoardAnimating && nowMs - lastPlayerMoveMs >= 4500L) {
+                    Match3Engine.findAnyValidMove(s.localPlayer.board)
+                } else {
+                    s.hintPair
+                }
 
                 _state.value = s.copy(
                     secondsRemaining = nextSec,
                     activeBeams = prunedBeams,
+                    hintPair = nextHint,
                     comboBannerText = if (nowMs - s.hitFlashToken > 1400L) "" else s.comboBannerText
                 )
 
-                // Step rival board & combat in trophy-scaled fallback matches
                 if (s.isBotMatch && nextSec > 0) {
                     val nextWaves = stepTrophyScaledRival(oppWave1Hp, oppWave2Hp, s.arenaId)
                     oppWave1Hp = nextWaves.first
@@ -284,19 +457,44 @@ class GameStateManager(
                     requestRealtimeSync(immediate = false)
                 }
 
-                // Evaluate real-time win/loss conditions
                 val latest = _state.value
                 if (latest.localPlayer.bossHp <= 0) {
-                    concludeSession(won = true, onSessionFinished = onSessionFinished)
+                    concludeSession(won = true)
                     break
                 } else if (latest.opponentPlayer.bossHp <= 0) {
-                    concludeSession(won = false, onSessionFinished = onSessionFinished)
+                    concludeSession(won = false)
                     break
                 } else if (nextSec <= 0) {
-                    val wonOnDamage = latest.localPlayer.totalDamage >= latest.opponentPlayer.totalDamage
-                    concludeSession(won = wonOnDamage, onSessionFinished = onSessionFinished)
+                    onTimeUp()
                     break
                 }
+            }
+        }
+    }
+
+    /**
+     * Time is up. Bot/local matches and player 1 decide immediately with the shared tie-break.
+     * Player 2 waits for player 1's FINISHED write (picked up by the observer) and only falls
+     * back to the same deterministic rule if nothing arrives, so both sides never both "win".
+     */
+    private fun onTimeUp() {
+        val s = _state.value
+        val p1 = if (s.amIPlayer1) s.localPlayer else s.opponentPlayer
+        val p2 = if (s.amIPlayer1) s.opponentPlayer else s.localPlayer
+        val authoritative = s.isBotMatch || s.amIPlayer1 || s.matchId.startsWith("local_")
+        if (authoritative) {
+            concludeSession(won = BattleRules.timeoutWinner(p1, p2) == s.localPlayer.uid)
+            return
+        }
+        _state.value = s.copy(awaitingResult = true, comboBannerText = "Time! Confirming result...")
+        resultGraceJob?.cancel()
+        resultGraceJob = scope.launch {
+            delay(5000L)
+            val cur = _state.value
+            if (!cur.isFinished) {
+                val q1 = if (cur.amIPlayer1) cur.localPlayer else cur.opponentPlayer
+                val q2 = if (cur.amIPlayer1) cur.opponentPlayer else cur.localPlayer
+                concludeSession(won = BattleRules.timeoutWinner(q1, q2) == cur.localPlayer.uid)
             }
         }
     }
@@ -304,8 +502,7 @@ class GameStateManager(
     private fun observeRemoteMatchSession(
         matchId: String,
         amIPlayer1: Boolean,
-        isBotMatch: Boolean,
-        onSessionFinished: (Boolean) -> Unit
+        isBotMatch: Boolean
     ) {
         if (matchId.startsWith("local_")) return
         liveObserverJob?.cancel()
@@ -320,7 +517,7 @@ class GameStateManager(
                 .collect { live ->
                     if (live == null) return@collect
                     val current = _state.value
-                    if (!current.isActive || current.isFinished) return@collect
+                    if (current.isFinished) return@collect
 
                     val remoteOpp = if (amIPlayer1) live.player2 else live.player1
                     if (!isBotMatch) {
@@ -355,12 +552,12 @@ class GameStateManager(
                             opponentPlayer = updatedOpp
                         )
 
-                        // Instant remote victory detection
+                        // Authoritative remote result (player 1 at time-up, or whoever killed the Boss)
                         if (live.status == "FINISHED" && live.winnerUid.isNotBlank()) {
                             val myUid = activeProfile?.userId.orEmpty()
-                            concludeSession(won = live.winnerUid == myUid, onSessionFinished = onSessionFinished)
+                            concludeSession(won = live.winnerUid == myUid, publish = false)
                         } else if (updatedOpp.bossHp <= 0) {
-                            concludeSession(won = false, onSessionFinished = onSessionFinished)
+                            concludeSession(won = false)
                         }
                     } else {
                         _state.value = current.copy(
@@ -372,81 +569,146 @@ class GameStateManager(
         }
     }
 
-    fun onTileTapped(pos: GridPos, onSessionFinished: (Boolean) -> Unit = {}) {
+    fun onTileTapped(pos: GridPos) {
         val s = _state.value
-        if (!s.isActive || s.isFinished) return
+        if (!s.isActive || s.isFinished || s.isBoardAnimating || s.awaitingResult) return
         val currentSel = s.selectedTile
         when {
-            currentSel == null -> _state.value = s.copy(selectedTile = pos)
+            currentSel == null -> _state.value = s.copy(selectedTile = pos, hintPair = null)
             currentSel == pos -> _state.value = s.copy(selectedTile = null)
-            Match3Engine.areAdjacent(currentSel, pos) -> performLocalSwap(currentSel, pos, onSessionFinished)
-            else -> _state.value = s.copy(selectedTile = pos)
+            Match3Engine.areAdjacent(currentSel, pos) -> performLocalSwap(currentSel, pos)
+            else -> _state.value = s.copy(selectedTile = pos, hintPair = null)
         }
     }
 
-    fun onTileSwiped(from: GridPos, to: GridPos, onSessionFinished: (Boolean) -> Unit = {}) {
+    fun onTileSwiped(from: GridPos, to: GridPos) {
         val s = _state.value
-        if (!s.isActive || s.isFinished) return
+        if (!s.isActive || s.isFinished || s.isBoardAnimating || s.awaitingResult) return
         if (Match3Engine.areAdjacent(from, to)) {
-            performLocalSwap(from, to, onSessionFinished)
+            performLocalSwap(from, to)
         }
     }
 
-    private fun performLocalSwap(a: GridPos, b: GridPos, onSessionFinished: (Boolean) -> Unit) {
+    private fun performLocalSwap(a: GridPos, b: GridPos) {
         val s = _state.value
-        val res = Match3Engine.attemptSwap(s.localPlayer.board, a, b)
-        if (res == null) {
-            _state.value = s.copy(selectedTile = null)
+        val stepped = Match3Engine.attemptSwapSteps(s.localPlayer.board, a, b)
+        if (stepped == null) {
+            val token = System.currentTimeMillis()
+            lastPlayerMoveMs = token
+            _state.value = s.copy(
+                selectedTile = null,
+                invalidSwapPair = a to b,
+                invalidSwapToken = token
+            )
+            scope.launch {
+                delay(280L)
+                if (_state.value.invalidSwapToken == token) {
+                    _state.value = _state.value.copy(invalidSwapPair = null)
+                }
+            }
             return
         }
-        applyLocalResolution(
-            res = res,
+        runSteppedResolution(
+            stepped = stepped,
+            animateInitialSwap = true,
             abilityBonusDamage = 0,
             usedAbilityLabel = null,
-            consumedSlotIndex = null,
-            onSessionFinished = onSessionFinished
+            consumedSlotIndex = null
         )
     }
 
-    fun activateEcoDeckSlot(slotIndex: Int, onSessionFinished: (Boolean) -> Unit = {}) {
+    fun activateEcoDeckSlot(slotIndex: Int) {
         val s = _state.value
-        if (!s.isActive || s.isFinished) return
+        if (!s.isActive || s.isFinished || s.isBoardAnimating || s.awaitingResult) return
         val charge = s.localPlayer.skillCharges.getOrElse(slotIndex) { 0 }
         if (charge < 100) return
 
         val bossId = s.localPlayer.deckBossIds.getOrElse(slotIndex) { return }
         val bossLvl = s.localPlayer.deckBossLevels.getOrElse(slotIndex) { 1 }
         val bossDef = GameCatalog.bossById(bossId)
-        val res = Match3Engine.applyBossAbility(s.localPlayer.board, bossDef)
+        val stepped = Match3Engine.applyBossAbilitySteps(s.localPlayer.board, bossDef)
 
         soundPlayer.playAbilityBlast()
         pendingReplayNote = "${s.localPlayer.name} unleashed ${bossDef.name}'s ${bossDef.abilityName}!"
 
-        applyLocalResolution(
-            res = res,
+        runSteppedResolution(
+            stepped = stepped,
+            animateInitialSwap = false,
             abilityBonusDamage = bossDef.abilityDamageAtLevel(bossLvl),
             usedAbilityLabel = "${bossDef.name}: ${bossDef.abilityName}",
-            consumedSlotIndex = slotIndex,
-            onSessionFinished = onSessionFinished
+            consumedSlotIndex = slotIndex
         )
+    }
+
+    private fun runSteppedResolution(
+        stepped: SteppedMatchResolution,
+        animateInitialSwap: Boolean,
+        abilityBonusDamage: Int,
+        usedAbilityLabel: String?,
+        consumedSlotIndex: Int?
+    ) {
+        val startState = _state.value
+        lastPlayerMoveMs = System.currentTimeMillis()
+        _state.value = startState.copy(
+            selectedTile = null,
+            hintPair = null,
+            isBoardAnimating = true
+        )
+
+        swapAnimJob?.cancel()
+        swapAnimJob = scope.launch {
+            try {
+                if (animateInitialSwap) {
+                    val cur = _state.value
+                    _state.value = cur.copy(
+                        localPlayer = cur.localPlayer.copy(board = stepped.swappedBoard)
+                    )
+                    delay(125L)
+                }
+
+                stepped.steps.forEachIndexed { idx, step ->
+                    if (!_state.value.isActive || _state.value.isFinished) return@launch
+                    soundPlayer.playMatch(step.comboIndex)
+                    val cur = _state.value
+                    _state.value = cur.copy(
+                        popBurstTiles = step.clearedTiles,
+                        popBurstToken = System.currentTimeMillis(),
+                        comboFlashLevel = step.comboIndex,
+                        localPlayer = cur.localPlayer.copy(board = step.boardAfterGravity)
+                    )
+                    delay(if (idx == stepped.steps.lastIndex) 115L else 220L)
+                }
+
+                if (_state.value.isActive && !_state.value.isFinished) {
+                    applyLocalResolution(
+                        res = stepped.finalResolution,
+                        abilityBonusDamage = abilityBonusDamage,
+                        usedAbilityLabel = usedAbilityLabel,
+                        consumedSlotIndex = consumedSlotIndex
+                    )
+                }
+            } finally {
+                _state.value = _state.value.copy(isBoardAnimating = false)
+            }
+        }
     }
 
     private fun applyLocalResolution(
         res: MatchResolution,
         abilityBonusDamage: Int,
         usedAbilityLabel: String?,
-        consumedSlotIndex: Int?,
-        onSessionFinished: (Boolean) -> Unit
+        consumedSlotIndex: Int?
     ) {
         val s = _state.value
         val local = s.localPlayer
+        val sharedBoss = GameCatalog.bossById(s.sharedBossId)
         soundPlayer.playMatch(res.comboCount)
 
         for ((type, count) in res.countsByType) {
             tilesMatchedByType[type] = (tilesMatchedByType[type] ?: 0) + count
         }
 
-        // Compute Eco-Deck preferred recyclable synergy multiplier + skill charges
+        // Eco-Deck preferred recyclable synergy multiplier + skill charges
         var deckBonusMult = 1f
         val newCharges = local.skillCharges.toMutableList()
         while (newCharges.size < 3) newCharges.add(0)
@@ -467,48 +729,35 @@ class GameStateManager(
             }
         }
 
+        // Each monster is made of one material and takes extra damage from it.
+        val (weakness, weakMult) = BattleRules.weaknessFor(local.waveIndex, local.waveMobs, sharedBoss)
+        val weakHits = res.countsByType[weakness] ?: 0
         val comboMult = 1f + (res.comboCount - 1) * 0.35f
-        val tileDamage = (res.totalCleared * 25f * deckBonusMult * comboMult).toInt()
+        val tileDamage = (BattleRules.weightedCleared(res.countsByType, weakness, weakMult) * 25f * deckBonusMult * comboMult).toInt()
         val totalHit = tileDamage + abilityBonusDamage
 
-        // Apply damage across Wave 1 -> Wave 2 -> Shared Boss
-        var waveIdx = local.waveIndex
-        var curHp = local.currentEnemyHp
-        var curMaxHp = local.currentEnemyMaxHp
-        var bossHp = local.bossHp
-        var remaining = totalHit
-        var waveTransitioned = false
-
-        if (waveIdx == 1 && remaining > 0) {
-            val dealt = remaining.coerceAtMost(curHp)
-            curHp -= dealt
-            remaining -= dealt
-            if (curHp <= 0) {
-                waveIdx = 2
-                curMaxHp = wave2HpBase + s.arenaId * 110
-                curHp = curMaxHp
-                waveTransitioned = true
-                pendingReplayNote = "${local.name} cleared Wave 1!"
+        val outcome = BattleRules.applyDamage(
+            damage = totalHit,
+            waveIndex = local.waveIndex,
+            mobs = local.waveMobs,
+            bossHp = local.bossHp,
+            waves = s.waveMobIds,
+            arenaId = s.arenaId,
+            bossName = sharedBoss.name
+        )
+        val waveIdx = outcome.waveIndex
+        val bossHp = outcome.bossHp
+        if (outcome.waveTransitioned) {
+            pendingReplayNote = when (waveIdx) {
+                2 -> "${local.name} cleared Wave 1!"
+                else -> "${local.name} summoned the Shared Boss!"
             }
         }
-        if (waveIdx == 2 && remaining > 0) {
-            val dealt = remaining.coerceAtMost(curHp)
-            curHp -= dealt
-            remaining -= dealt
-            if (curHp <= 0) {
-                waveIdx = 3
-                curMaxHp = local.bossMaxHp
-                curHp = bossHp
-                waveTransitioned = true
-                pendingReplayNote = "${local.name} summoned the Shared Boss!"
-            }
-        }
-        if (waveIdx == 3 && remaining > 0) {
-            bossHp = (bossHp - remaining).coerceAtLeast(0)
-            curHp = bossHp
-        }
 
-        val totalPool = (wave1HpBase + s.arenaId * 90) + (wave2HpBase + s.arenaId * 110) + local.bossMaxHp
+        val curHp = if (waveIdx >= 3) bossHp else outcome.mobs.sumOf { it.hp }
+        val curMaxHp = if (waveIdx >= 3) local.bossMaxHp else outcome.mobs.sumOf { it.maxHp }
+
+        val totalPool = BattleRules.totalPool(s.arenaId, local.bossMaxHp)
         val newTotalDamage = local.totalDamage + totalHit
         val restorationPct = if (bossHp <= 0) 100 else ((newTotalDamage.toFloat() / totalPool.toFloat()) * 100f).toInt().coerceIn(0, 99)
         val pollutionLevel = (1f - restorationPct / 100f).coerceIn(0f, 1f)
@@ -518,9 +767,11 @@ class GameStateManager(
         val newBeams = buildBeamBurst(res, dominantType, totalHit, usedAbilityLabel != null, nowMs)
 
         val comboText = when {
+            outcome.defeatedNames.isNotEmpty() -> "${outcome.defeatedNames.last()} purified! -$totalHit"
             usedAbilityLabel != null -> "ECO-SKILL! -$totalHit"
             res.comboCount >= 4 -> "${res.comboCount}x MEGA CASCADE! -$totalHit"
             res.comboCount >= 2 -> "${res.comboCount}x COMBO! -$totalHit"
+            weakHits > 0 -> "WEAK SPOT x${if (local.waveIndex < 3) "2" else "1.5"}! -$totalHit"
             res.spawnedSpecialCount > 0 -> "POWER TILE! -$totalHit"
             else -> "-$totalHit HP"
         }
@@ -529,6 +780,7 @@ class GameStateManager(
             board = res.newBoard,
             boardFlat = Match3Engine.encodeBoardFlat(res.newBoard),
             waveIndex = waveIdx,
+            waveMobs = outcome.mobs,
             currentEnemyHp = curHp,
             currentEnemyMaxHp = curMaxHp,
             bossHp = bossHp,
@@ -547,17 +799,22 @@ class GameStateManager(
             lastDamageDealt = totalHit,
             comboBannerText = comboText,
             activeBeams = (s.activeBeams + newBeams).takeLast(9),
+            mobDefeatedToken = if (outcome.defeatedNames.isNotEmpty()) nowMs else s.mobDefeatedToken,
+            lastDefeatedName = outcome.defeatedNames.lastOrNull() ?: s.lastDefeatedName,
             blueTilesMatched = tilesMatchedByType[WasteType.PLASTIC_BLUE] ?: 0,
             totalTilesMatched = s.totalTilesMatched + res.totalCleared,
             maxCombo = maxOf(s.maxCombo, res.comboCount),
             abilitiesUsedCount = s.abilitiesUsedCount + if (consumedSlotIndex != null) 1 else 0
         )
+        if (outcome.defeatedNames.isNotEmpty() && pendingReplayNote.isBlank()) {
+            pendingReplayNote = "${local.name} purified ${outcome.defeatedNames.joinToString()}!"
+        }
 
         if (bossHp <= 0) {
-            scope.launch { concludeSession(won = true, onSessionFinished = onSessionFinished) }
+            concludeSession(won = true)
         } else {
-            // Immediate real-time cloud push on wave clears / Eco-Deck abilities, or 450ms throttled push on moves
-            requestRealtimeSync(immediate = waveTransitioned || consumedSlotIndex != null)
+            // Immediate push on wave clears / Eco-Deck abilities, or ~450ms throttled push on moves
+            requestRealtimeSync(immediate = outcome.waveTransitioned || consumedSlotIndex != null)
         }
     }
 
@@ -599,37 +856,12 @@ class GameStateManager(
         val opp = s.opponentPlayer
         var w1 = oppWave1Remaining
         var w2 = oppWave2Remaining
-        var oppBoard = opp.board
-        val move = Match3Engine.findAnyValidMove(oppBoard)
-        var dmg = 0
-        val charges = opp.skillCharges.toMutableList()
-        while (charges.size < 3) charges.add(0)
-        var lastAbility = opp.lastAbilityText
-
-        if (move != null && Random.nextFloat() < 0.78f) {
-            val res = Match3Engine.attemptSwap(oppBoard, move.first, move.second)
-            if (res != null) {
-                oppBoard = res.newBoard
-                val avgLevel = opp.deckBossLevels.average().toFloat().coerceAtLeast(1f)
-                dmg = (res.totalCleared * (19 + arenaId * 3) * (1f + (avgLevel - 1f) * 0.1f) * (1f + (res.comboCount - 1) * 0.2f)).toInt()
-                for (i in 0 until 3) {
-                    charges[i] = (charges[i] + res.totalCleared * 4).coerceAtMost(100)
-                }
-            }
-        }
-
-        val readySlot = charges.indexOfFirst { it >= 100 }
-        if (readySlot >= 0) {
-            val bossId = opp.deckBossIds.getOrElse(readySlot) { "boss_b1" }
-            val bossLvl = opp.deckBossLevels.getOrElse(readySlot) { 1 }
-            val bossDef = GameCatalog.bossById(bossId)
-            val abRes = Match3Engine.applyBossAbility(oppBoard, bossDef)
-            oppBoard = abRes.newBoard
-            dmg += bossDef.abilityDamageAtLevel(bossLvl) / 2
-            charges[readySlot] = 0
-            lastAbility = "${bossDef.name}: ${bossDef.abilityName}"
-            pendingReplayNote = "${opp.name} unleashed ${bossDef.abilityName}!"
-        }
+        val tick = BattleRules.botTick(opp.board, opp.skillCharges, opp.deckBossIds, opp.deckBossLevels, arenaId, Random.Default)
+        val oppBoard = tick.board
+        val dmg = tick.damage
+        val charges = tick.charges
+        val lastAbility = tick.abilityLabel ?: opp.lastAbilityText
+        if (tick.abilityLabel != null) pendingReplayNote = "${opp.name} unleashed ${tick.abilityLabel.substringAfter(": ")}!"
 
         var waveIdx = opp.waveIndex
         var bossHp = opp.bossHp
@@ -657,7 +889,7 @@ class GameStateManager(
             bossHp = (bossHp - remainingDmg).coerceAtLeast(0)
         }
 
-        val totalPool = (wave1HpBase + arenaId * 90) + (wave2HpBase + arenaId * 110) + opp.bossMaxHp
+        val totalPool = BattleRules.totalPool(arenaId, opp.bossMaxHp)
         val newTotalDmg = opp.totalDamage + dmg
         val restPct = if (bossHp <= 0) 100 else ((newTotalDmg.toFloat() / totalPool.toFloat()) * 100f).toInt().coerceIn(0, 99)
         val pollution = (1f - restPct / 100f).coerceIn(0f, 1f)
@@ -680,9 +912,9 @@ class GameStateManager(
     }
 
     /**
-     * Pushes local player's 7x7 tile grid, Boss HP, wave index, skill charges, and pollution restoration
-     * to Firestore `liveMatches/{matchId}` with smart throttling (~450ms) so human opponents and
-     * spectators stay synchronized in near real-time without flooding writes.
+     * Pushes the local player's grid, Boss HP, wave index, skill charges and restoration to
+     * Firestore `liveMatches/{matchId}`, throttled (~450ms). Only our own player field is written
+     * (plus the bot's in bot matches), which is all the security rules allow.
      */
     private fun requestRealtimeSync(immediate: Boolean) {
         val s = _state.value
@@ -706,8 +938,12 @@ class GameStateManager(
         }
     }
 
-    private suspend fun pushSessionSnapshotToFirestore(finished: Boolean, winnerUid: String) {
-        val s = _state.value
+    private suspend fun pushSessionSnapshotToFirestore(
+        finished: Boolean,
+        winnerUid: String,
+        snapshot: GameSessionState = _state.value
+    ) {
+        val s = snapshot
         if (s.matchId.isBlank() || s.matchId.startsWith("local_")) return
 
         _state.value = _state.value.copy(syncStatus = SessionSyncStatus.SYNCING)
@@ -754,7 +990,12 @@ class GameStateManager(
         }
     }
 
-    private suspend fun concludeSession(won: Boolean, onSessionFinished: (Boolean) -> Unit) {
+    /**
+     * Ends the match exactly once. It never suspends: the jobs that may be calling it (timer,
+     * live observer, swap animation) are cancelled, and persistence runs in its own
+     * non-cancellable coroutine so rewards and the replay are always written.
+     */
+    private fun concludeSession(won: Boolean, publish: Boolean = true) {
         val s = _state.value
         if (s.isFinished) return
 
@@ -764,90 +1005,88 @@ class GameStateManager(
         if (won) soundPlayer.playVictory()
 
         recordReplayFrame("$winnerName purified ${GameCatalog.placeById(s.placeId).name} and won!")
-        _state.value = s.copy(isActive = false, isFinished = true, wonMatch = won)
+        val finishedState = s.copy(isActive = false, isFinished = true, awaitingResult = false, wonMatch = won)
+        _state.value = finishedState
         timerLoopJob?.cancel()
         liveObserverJob?.cancel()
         throttledSyncJob?.cancel()
-        onSessionFinished(won)
+        swapAnimJob?.cancel()
+        resultGraceJob?.cancel()
+        onFinished(won)
 
-        pushSessionSnapshotToFirestore(finished = true, winnerUid = winnerUid)
+        val frames = recordedFrames.toList()
+        val matchedByType = tilesMatchedByType.toMap()
 
-        // Persist Battle Replay for Spectator & Friends playback
-        var savedReplayId: String? = null
-        if (profile != null && (s.amIPlayer1 || s.isBotMatch)) {
-            val p1 = if (s.amIPlayer1) s.localPlayer else s.opponentPlayer
-            val p2 = if (s.amIPlayer1) s.opponentPlayer else s.localPlayer
+        scope.launch(start = CoroutineStart.ATOMIC) {
+            withContext(NonCancellable) {
+                if (publish) pushSessionSnapshotToFirestore(finished = true, winnerUid = winnerUid, snapshot = finishedState)
 
-            val replay = MatchReplay(
-                creatorUid = profile.userId,
-                participantUids = listOf(profile.userId, s.opponentPlayer.uid.ifBlank { "rival_uid" }),
-                replayPublic = true,
-                arenaId = s.arenaId,
-                placeId = s.placeId,
-                bossId = s.sharedBossId,
-                trophyBracket = s.arenaId,
-                winnerUid = winnerUid,
-                durationSec = (s.totalDurationSec - s.secondsRemaining).coerceIn(1, 300),
-                player1Summary = ReplaySummary(
-                    uid = p1.uid,
-                    name = p1.name,
-                    trophies = p1.trophies,
-                    deckBossIds = p1.deckBossIds,
-                    deckBossLevels = p1.deckBossLevels,
-                    totalDamage = p1.totalDamage,
-                    restorationPct = p1.restorationPct
-                ),
-                player2Summary = ReplaySummary(
-                    uid = p2.uid,
-                    name = p2.name,
-                    trophies = p2.trophies,
-                    deckBossIds = p2.deckBossIds,
-                    deckBossLevels = p2.deckBossLevels,
-                    totalDamage = p2.totalDamage,
-                    restorationPct = p2.restorationPct
-                ),
-                frames = recordedFrames.toList().ifEmpty {
-                    listOf(
-                        ReplayFrame(
-                            elapsedSec = 1,
-                            p1Board = p1.boardFlat,
-                            p2Board = p2.boardFlat
-                        )
-                    )
+                // Persist Battle Replay for Spectator & Friends playback
+                var savedReplayId: String? = null
+                if (profile != null && (s.amIPlayer1 || s.isBotMatch)) {
+                    savedReplayId = repository.saveReplay(buildReplay(s, profile.userId, winnerUid, frames)).getOrNull()
                 }
-            )
-            savedReplayId = repository.saveReplay(replay).getOrNull()
-        }
 
-        // Persist Trophies, Eco-Coins, Boss Capture card copy & Daily Quests telemetry
-        if (profile != null) {
-            val wavesCleared = (s.localPlayer.waveIndex - 1).coerceAtLeast(0) + if (s.localPlayer.bossHp <= 0) 1 else 0
-            val telemetry = MatchTelemetry(
-                won = won,
-                arenaId = s.arenaId,
-                placeId = s.placeId,
-                bossId = s.sharedBossId,
-                totalDamage = s.localPlayer.totalDamage,
-                restorationPct = s.localPlayer.restorationPct,
-                wavesCleared = wavesCleared,
-                abilitiesUsed = s.abilitiesUsedCount,
-                maxCombo = s.maxCombo,
-                totalTilesMatched = s.totalTilesMatched,
-                tilesMatchedByType = tilesMatchedByType.toMap(),
-                deckBossIds = s.localPlayer.deckBossIds
-            )
-            val reward = repository.applyMatchResult(profile, telemetry).getOrNull()
-            _state.value = _state.value.copy(
-                rewardOutcome = reward,
-                replayId = savedReplayId
-            )
+                // Persist Trophies, Eco-Coins, Boss card & Daily Quest telemetry
+                if (profile != null) {
+                    val wavesCleared = (s.localPlayer.waveIndex - 1).coerceAtLeast(0) + if (s.localPlayer.bossHp <= 0) 1 else 0
+                    val telemetry = MatchTelemetry(
+                        won = won,
+                        arenaId = s.arenaId,
+                        placeId = s.placeId,
+                        bossId = s.sharedBossId,
+                        totalDamage = s.localPlayer.totalDamage,
+                        restorationPct = s.localPlayer.restorationPct,
+                        wavesCleared = wavesCleared,
+                        abilitiesUsed = s.abilitiesUsedCount,
+                        maxCombo = s.maxCombo,
+                        totalTilesMatched = s.totalTilesMatched,
+                        tilesMatchedByType = matchedByType,
+                        deckBossIds = s.localPlayer.deckBossIds
+                    )
+                    val reward = repository.applyMatchResult(profile, telemetry).getOrNull()
+                    if (_state.value.matchId == s.matchId) {
+                        _state.value = _state.value.copy(rewardOutcome = reward, replayId = savedReplayId)
+                    }
+                }
+            }
         }
+    }
+
+    private fun buildReplay(s: GameSessionState, creatorUid: String, winnerUid: String, frames: List<ReplayFrame>): MatchReplay {
+        val p1 = if (s.amIPlayer1) s.localPlayer else s.opponentPlayer
+        val p2 = if (s.amIPlayer1) s.opponentPlayer else s.localPlayer
+        fun summary(p: PlayerBattleSnapshot) = ReplaySummary(
+            uid = p.uid,
+            name = p.name,
+            trophies = p.trophies,
+            deckBossIds = p.deckBossIds,
+            deckBossLevels = p.deckBossLevels,
+            totalDamage = p.totalDamage,
+            restorationPct = p.restorationPct
+        )
+        return MatchReplay(
+            creatorUid = creatorUid,
+            participantUids = listOf(creatorUid, s.opponentPlayer.uid.ifBlank { "rival_uid" }),
+            replayPublic = true,
+            arenaId = s.arenaId,
+            placeId = s.placeId,
+            bossId = s.sharedBossId,
+            trophyBracket = s.arenaId,
+            winnerUid = winnerUid,
+            durationSec = (s.totalDurationSec - s.secondsRemaining).coerceIn(1, 300),
+            player1Summary = summary(p1),
+            player2Summary = summary(p2),
+            frames = frames.ifEmpty { listOf(ReplayFrame(elapsedSec = 1, p1Board = p1.boardFlat, p2Board = p2.boardFlat)) }
+        )
     }
 
     fun stopSession() {
         timerLoopJob?.cancel()
         liveObserverJob?.cancel()
         throttledSyncJob?.cancel()
+        swapAnimJob?.cancel()
+        resultGraceJob?.cancel()
         _state.value = GameSessionState(soundEnabled = soundPlayer.soundEnabled)
     }
 

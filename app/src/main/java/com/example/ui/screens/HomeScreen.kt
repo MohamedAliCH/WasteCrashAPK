@@ -17,6 +17,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -34,14 +35,16 @@ import com.example.ui.theme.*
 @Composable
 fun HomeScreen(
     profile: UserProfile,
-    liveMatchesCount: Int,
+    unlockedPlacesCount: Int,
     claimableQuestsCount: Int,
     onBattleClicked: () -> Unit,
+    onOpenTunisiaMap: () -> Unit,
     onOpenDeck: () -> Unit,
     onOpenArenas: () -> Unit,
-    onOpenSpectator: () -> Unit,
+    onOpenAlbum: () -> Unit,
     onOpenQuests: () -> Unit,
-    onSignOut: () -> Unit
+    onSignOut: () -> Unit,
+    onOpenSpectatorHub: () -> Unit = {}
 ) {
     val arena = GameCatalog.arenaForTrophies(profile.trophies)
     val nextThreshold = arena.nextArenaTrophies
@@ -53,9 +56,14 @@ fun HomeScreen(
     Column(
         modifier = Modifier
             .fillMaxSize()
+            .background(
+                Brush.verticalGradient(
+                    listOf(Color(0xFF0C1E42), DarkBgPrimary, Color(0xFF050D1D))
+                )
+            )
             .verticalScroll(rememberScrollState())
             .padding(horizontal = 16.dp, vertical = 10.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
+        verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
         // 1. Top Player Profile + WasteCrush Wordmark Strip
         Row(
@@ -69,7 +77,7 @@ fun HomeScreen(
                         .size(44.dp)
                         .clip(CircleShape)
                         .background(Brush.linearGradient(listOf(CeramicBlueTop, CeramicBlueBottom)))
-                        .border(2.5.dp, DeepNavyInk, CircleShape),
+                        .border(2.5.dp, SaffronGold, CircleShape),
                     contentAlignment = Alignment.Center
                 ) {
                     Text(
@@ -83,14 +91,14 @@ fun HomeScreen(
                     Text(
                         text = profile.displayName,
                         style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.ExtraBold),
-                        color = DeepNavyInk,
+                        color = TextOnDark,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
                     Text(
                         text = "Code: ${profile.friendCode}  •  ${profile.wins}W-${profile.losses}L",
                         style = MaterialTheme.typography.labelSmall,
-                        color = MutedSlateText
+                        color = TextMutedOnDark
                     )
                 }
             }
@@ -104,7 +112,7 @@ fun HomeScreen(
                 Icon(
                     imageVector = Icons.AutoMirrored.Filled.Logout,
                     contentDescription = "Sign out",
-                    tint = MutedSlateText
+                    tint = TextMutedOnDark
                 )
             }
         }
@@ -134,9 +142,9 @@ fun HomeScreen(
                     .clickable(onClick = onOpenQuests)
                     .testTag("home_quests_pill"),
                 shape = RoundedCornerShape(50),
-                color = if (claimableQuestsCount > 0) SaffronCream else SurfaceWhite,
-                border = BorderStroke(2.dp, if (claimableQuestsCount > 0) SaffronGoldDark else DeepNavyInk),
-                shadowElevation = 2.dp
+                color = if (claimableQuestsCount > 0) SaffronGold.copy(alpha = 0.22f) else DarkSurfaceCard,
+                border = BorderStroke(1.8.dp, if (claimableQuestsCount > 0) SaffronGold else DarkBorderSubtle),
+                shadowElevation = 4.dp
             ) {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
@@ -145,42 +153,58 @@ fun HomeScreen(
                     Icon(
                         imageVector = Icons.Default.TaskAlt,
                         contentDescription = "Daily Quests",
-                        tint = if (claimableQuestsCount > 0) EcoEmeraldDark else CeramicBlueBottom,
+                        tint = if (claimableQuestsCount > 0) SaffronGold else CeramicBlueTop,
                         modifier = Modifier.size(18.dp)
                     )
                     Spacer(Modifier.width(4.dp))
                     Text(
                         text = if (claimableQuestsCount > 0) "$claimableQuestsCount Ready!" else "Quests",
                         style = MaterialTheme.typography.labelMedium,
-                        color = DeepNavyInk
+                        color = TextOnDark
                     )
                 }
             }
         }
 
-        // 2. Premium Sunlit Tunisian Arena Showcase Hero Card (homepage_22684661.jpg inspired!)
+        // 2. Large Interactive Tunisia Map & Arena Hero Showcase Card
         Surface(
             modifier = Modifier
                 .fillMaxWidth()
-                .clip(RoundedCornerShape(26.dp))
-                .clickable(onClick = onOpenArenas)
+                .clip(RoundedCornerShape(28.dp))
+                .clickable(onClick = onOpenTunisiaMap)
                 .testTag("home_arena_card"),
-            shape = RoundedCornerShape(26.dp),
-            color = SurfaceWhite,
-            border = BorderStroke(3.dp, DeepNavyInk),
-            shadowElevation = 8.dp
+            shape = RoundedCornerShape(28.dp),
+            color = DarkSurfaceCard,
+            border = BorderStroke(
+                2.5.dp,
+                Brush.linearGradient(listOf(GlowBeamGold, SaffronGold, CeramicBlueTop))
+            ),
+            shadowElevation = 14.dp
         ) {
             Column {
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(206.dp)
+                        .height(350.dp)
                 ) {
+                    // Subtle arena artwork blended behind Tunisia geographic chart
                     Image(
                         painter = painterResource(id = arena.bannerRes),
                         contentDescription = arena.name,
                         contentScale = ContentScale.Crop,
-                        modifier = Modifier.fillMaxSize()
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .alpha(0.24f)
+                    )
+                    TunisiaMapCanvas(
+                        places = GameCatalog.allPlaces,
+                        selectedPlaceId = arena.places.firstOrNull()?.id,
+                        userTrophies = profile.trophies,
+                        onPlaceSelected = { onOpenTunisiaMap() },
+                        previewMode = true,
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .alpha(0.92f)
                     )
                     Box(
                         modifier = Modifier
@@ -188,9 +212,9 @@ fun HomeScreen(
                             .background(
                                 Brush.verticalGradient(
                                     listOf(
-                                        DeepNavyInk.copy(alpha = 0.25f),
+                                        DarkBgPrimary.copy(alpha = 0.55f),
                                         Color.Transparent,
-                                        DeepNavyInk.copy(alpha = 0.88f)
+                                        DarkBgPrimary.copy(alpha = 0.88f)
                                     )
                                 )
                             )
@@ -201,14 +225,37 @@ fun HomeScreen(
                         compact = true,
                         modifier = Modifier
                             .align(Alignment.TopCenter)
-                            .padding(top = 10.dp)
+                            .padding(top = 12.dp)
                     )
 
-                    // Live featured Boss sprite standing proudly on the Tunisian landmark!
+                    // Tap to Explore Map Pill
+                    Surface(
+                        modifier = Modifier
+                            .align(Alignment.TopEnd)
+                            .padding(top = 56.dp, end = 12.dp),
+                        shape = RoundedCornerShape(50),
+                        color = DarkBgPrimary.copy(alpha = 0.88f),
+                        border = BorderStroke(1.2.dp, SaffronGold)
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(Icons.Default.Map, contentDescription = null, tint = SaffronGold, modifier = Modifier.size(13.dp))
+                            Spacer(Modifier.width(4.dp))
+                            Text(
+                                text = "TAP MAP • 15 PLACES >",
+                                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.ExtraBold),
+                                color = GlowBeamGold
+                            )
+                        }
+                    }
+
+                    // Live featured Boss sprite standing proudly on Tunisia!
                     BossMonsterAvatar(
                         boss = leadBoss,
                         modifier = Modifier
-                            .size(92.dp)
+                            .size(112.dp)
                             .align(Alignment.BottomEnd)
                             .padding(end = 10.dp, bottom = 10.dp)
                     )
@@ -250,7 +297,11 @@ fun HomeScreen(
                 }
 
                 // Trophy Progress Bar toward Next Arena
-                Column(modifier = Modifier.padding(14.dp)) {
+                Column(
+                    modifier = Modifier
+                        .clickable(onClick = onOpenArenas)
+                        .padding(14.dp)
+                ) {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
@@ -259,12 +310,12 @@ fun HomeScreen(
                         Text(
                             text = if (nextThreshold != null) "Next Arena at $nextThreshold Trophies" else "Max Arena Reached — Saharan Master!",
                             style = MaterialTheme.typography.labelMedium,
-                            color = DeepNavyInk
+                            color = TextOnDark
                         )
                         Text(
                             text = "Trophy Road >",
                             style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.ExtraBold),
-                            color = CeramicBlueBottom
+                            color = CeramicBlueTop
                         )
                     }
                     Spacer(Modifier.height(8.dp))
@@ -273,8 +324,8 @@ fun HomeScreen(
                             .fillMaxWidth()
                             .height(19.dp)
                             .clip(RoundedCornerShape(50))
-                            .background(SurfaceSoftBlue)
-                            .border(2.dp, DeepNavyInk, RoundedCornerShape(50))
+                            .background(DarkSurfaceElevated)
+                            .border(1.5.dp, DarkBorderSubtle, RoundedCornerShape(50))
                     ) {
                         Box(
                             modifier = Modifier
@@ -285,7 +336,7 @@ fun HomeScreen(
                         Text(
                             text = if (nextThreshold != null) "${profile.trophies} / $nextThreshold" else "${profile.trophies} Trophies",
                             style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.ExtraBold),
-                            color = DeepNavyInk,
+                            color = Color.White,
                             modifier = Modifier.align(Alignment.Center)
                         )
                     }
@@ -306,17 +357,17 @@ fun HomeScreen(
             tag = "battle_start_button"
         )
 
-        // 4. Glossy Ceramic-Blue 3D Square Icon Tiles (MAP / DECKS / WATCH TV / QUESTS)
+        // 4. Glossy Ceramic-Blue 3D Square Icon Tiles (MAP / ECO-DECK / ALBUM / QUESTS)
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
             GlossyIconTile(
-                label = "ARENAS",
-                icon = Icons.Default.Public,
-                onClick = onOpenArenas,
+                label = "MAP",
+                icon = Icons.Default.Map,
+                onClick = onOpenTunisiaMap,
                 modifier = Modifier.weight(1f),
-                tag = "home_tile_arenas"
+                tag = "home_tile_map"
             )
             GlossyIconTile(
                 label = "ECO-DECK",
@@ -326,12 +377,12 @@ fun HomeScreen(
                 tag = "home_tile_decks"
             )
             GlossyIconTile(
-                label = "WATCH TV",
-                icon = Icons.Default.LiveTv,
-                onClick = onOpenSpectator,
-                badgeText = if (liveMatchesCount > 0) "$liveMatchesCount" else null,
+                label = "ALBUM",
+                icon = Icons.Default.PhotoLibrary,
+                onClick = onOpenAlbum,
+                badgeText = "$unlockedPlacesCount/15",
                 modifier = Modifier.weight(1f),
-                tag = "home_spectator_button"
+                tag = "home_album_button"
             )
             GlossyIconTile(
                 label = "QUESTS",
@@ -346,15 +397,41 @@ fun HomeScreen(
             )
         }
 
+        // Live TV & Replays (Spectator Hub)
+        Surface(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable(onClick = onOpenSpectatorHub)
+                .testTag("home_spectator_hub_button"),
+            shape = RoundedCornerShape(18.dp),
+            color = DarkSurfaceCard,
+            border = BorderStroke(2.dp, DarkBorderSubtle)
+        ) {
+            Row(
+                modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(Icons.Default.LiveTv, contentDescription = null, tint = SidiSkyLight)
+                Spacer(Modifier.width(10.dp))
+                Text(
+                    "Live TV & Replays",
+                    style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.ExtraBold),
+                    color = TextOnDark,
+                    modifier = Modifier.weight(1f)
+                )
+                Icon(Icons.Default.ChevronRight, contentDescription = null, tint = TextMutedOnDark)
+            }
+        }
+
         // 5. Equipped 3-Slot Eco-Deck Showcase Strip with Real Boss Sprites
         Surface(
             modifier = Modifier
                 .fillMaxWidth()
                 .clickable(onClick = onOpenDeck),
             shape = RoundedCornerShape(22.dp),
-            color = SurfaceWhite,
-            border = BorderStroke(2.5.dp, DeepNavyInk),
-            shadowElevation = 4.dp
+            color = DarkSurfaceCard,
+            border = BorderStroke(2.dp, DarkBorderSubtle),
+            shadowElevation = 6.dp
         ) {
             Column(modifier = Modifier.padding(14.dp)) {
                 Row(
@@ -366,20 +443,20 @@ fun HomeScreen(
                         Icon(
                             imageVector = Icons.Default.AutoAwesome,
                             contentDescription = null,
-                            tint = CeramicBlueBottom,
+                            tint = SaffronGold,
                             modifier = Modifier.size(18.dp)
                         )
                         Spacer(Modifier.width(6.dp))
                         Text(
                             text = "Active Eco-Deck (3 Slots)",
                             style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.ExtraBold),
-                            color = DeepNavyInk
+                            color = TextOnDark
                         )
                     }
                     Text(
                         text = "Upgrade >",
                         style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.ExtraBold),
-                        color = CeramicBlueBottom
+                        color = CeramicBlueTop
                     )
                 }
 
@@ -395,7 +472,7 @@ fun HomeScreen(
                         Surface(
                             modifier = Modifier.weight(1f),
                             shape = RoundedCornerShape(16.dp),
-                            color = boss.bodyColor.copy(alpha = 0.12f),
+                            color = boss.bodyColor.copy(alpha = 0.16f),
                             border = BorderStroke(2.dp, boss.rarity.frameColor)
                         ) {
                             Column(
@@ -411,14 +488,14 @@ fun HomeScreen(
                                 Text(
                                     text = boss.name,
                                     style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.ExtraBold),
-                                    color = DeepNavyInk,
+                                    color = TextOnDark,
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis
                                 )
                                 Text(
                                     text = "Lv.$lvl • ${boss.preferredWaste.shortLabel}",
                                     style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Normal),
-                                    color = MutedSlateText,
+                                    color = TextMutedOnDark,
                                     maxLines = 1
                                 )
                             }

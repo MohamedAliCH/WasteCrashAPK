@@ -8,6 +8,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -24,6 +25,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.draw.shadow
@@ -40,12 +42,14 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.engine.BOARD_SIZE
@@ -57,7 +61,12 @@ import com.example.model.BossRarity
 import com.example.model.GameCatalog
 import com.example.model.WasteType
 import com.example.ui.theme.*
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlin.math.abs
+import kotlin.math.cos
+import kotlin.math.roundToInt
+import kotlin.math.sin
 
 @Composable
 fun GlossyButton(
@@ -84,7 +93,7 @@ fun GlossyButton(
             .shadow(elevation = if (enabled) 6.dp else 1.dp, shape = RoundedCornerShape(20.dp))
             .clip(RoundedCornerShape(20.dp))
             .background(actualLip)
-            .border(2.5.dp, DeepNavyInk, RoundedCornerShape(20.dp))
+            .border(2.dp, Color.White.copy(alpha = 0.24f), RoundedCornerShape(20.dp))
             .clickable(enabled = enabled, onClick = onClick)
             .padding(bottom = 6.dp)
     ) {
@@ -159,7 +168,7 @@ fun GlossyIconTile(
                     .shadow(5.dp, RoundedCornerShape(18.dp))
                     .clip(RoundedCornerShape(18.dp))
                     .background(lipColor)
-                    .border(2.5.dp, DeepNavyInk, RoundedCornerShape(18.dp))
+                    .border(2.dp, Color.White.copy(alpha = 0.28f), RoundedCornerShape(18.dp))
                     .padding(bottom = 5.dp)
             ) {
                 Box(
@@ -207,7 +216,7 @@ fun GlossyIconTile(
         Text(
             text = label,
             style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.ExtraBold),
-            color = DeepNavyInk,
+            color = TextOnDark,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis
         )
@@ -311,9 +320,9 @@ fun StatPill(
             .height(40.dp)
             .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier),
         shape = RoundedCornerShape(50),
-        color = SurfaceWhite,
-        border = BorderStroke(2.dp, DeepNavyInk),
-        shadowElevation = 3.dp
+        color = DarkSurfaceCard,
+        border = BorderStroke(1.8.dp, DarkBorderSubtle),
+        shadowElevation = 4.dp
     ) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
@@ -324,7 +333,7 @@ fun StatPill(
                     .size(30.dp)
                     .clip(CircleShape)
                     .background(badgeColor)
-                    .border(1.5.dp, DeepNavyInk, CircleShape),
+                    .border(1.5.dp, Color.White.copy(alpha = 0.85f), CircleShape),
                 contentAlignment = Alignment.Center
             ) {
                 Icon(
@@ -338,7 +347,7 @@ fun StatPill(
             Text(
                 text = value,
                 style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.ExtraBold),
-                color = DeepNavyInk
+                color = TextOnDark
             )
         }
     }
@@ -348,215 +357,166 @@ fun StatPill(
 fun RecyclableTileArt(
     tile: BoardTile,
     isSelected: Boolean,
+    isHinted: Boolean = false,
     modifier: Modifier = Modifier
 ) {
     val scale by animateFloatAsState(
-        targetValue = if (isSelected) 1.12f else 1f,
-        animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy),
+        targetValue = if (isSelected) 1.18f else 1f,
+        animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessMedium),
         label = "tileScale"
     )
+    val needsPulse = isSelected || isHinted || tile.special != SpecialTileType.NONE
+    val infiniteTransition = if (needsPulse) rememberInfiniteTransition(label = "tileEffects") else null
+    val wiggleAngle = if (isSelected && infiniteTransition != null) {
+        infiniteTransition.animateFloat(
+            initialValue = -4.5f,
+            targetValue = 4.5f,
+            animationSpec = infiniteRepeatable(tween(240, easing = FastOutSlowInEasing), RepeatMode.Reverse),
+            label = "selWiggle"
+        ).value
+    } else 0f
+    val hintPulse = if (isHinted && !isSelected && infiniteTransition != null) {
+        infiniteTransition.animateFloat(
+            initialValue = 1.0f,
+            targetValue = 1.09f,
+            animationSpec = infiniteRepeatable(tween(520, easing = FastOutSlowInEasing), RepeatMode.Reverse),
+            label = "hintPulse"
+        ).value
+    } else 1f
+    val specialSpin = if (tile.special != SpecialTileType.NONE && infiniteTransition != null) {
+        infiniteTransition.animateFloat(
+            initialValue = 0f,
+            targetValue = 360f,
+            animationSpec = infiniteRepeatable(tween(2200, easing = LinearEasing), RepeatMode.Restart),
+            label = "specSpin"
+        ).value
+    } else 0f
+    val specialPulse = if (tile.special != SpecialTileType.NONE && infiniteTransition != null) {
+        infiniteTransition.animateFloat(
+            initialValue = 0.65f,
+            targetValue = 1.0f,
+            animationSpec = infiniteRepeatable(tween(650, easing = FastOutSlowInEasing), RepeatMode.Reverse),
+            label = "specPulse"
+        ).value
+    } else 1f
+
     Box(
         modifier = modifier
-            .scale(scale)
-            .padding(2.dp)
-            .clip(RoundedCornerShape(10.dp))
-            .background(
-                Brush.verticalGradient(
-                    listOf(
-                        tile.type.primaryColor,
-                        tile.type.darkColor
-                    )
-                )
-            )
-            .border(
-                width = if (isSelected) 2.5.dp else 1.5.dp,
-                color = if (isSelected) GlowBeamGold else DeepNavyInk.copy(alpha = 0.85f),
-                shape = RoundedCornerShape(10.dp)
-            ),
+            .graphicsLayer {
+                val combined = scale * hintPulse
+                scaleX = combined
+                scaleY = combined
+                rotationZ = wiggleAngle
+            }
+            .padding(1.dp),
         contentAlignment = Alignment.Center
     ) {
-        Canvas(modifier = Modifier.fillMaxSize().padding(3.dp)) {
+        // Subtle color aura & soft elliptical ground shadow beneath the floating trash piece
+        Canvas(modifier = Modifier.fillMaxSize()) {
             val w = size.width
             val h = size.height
-
-            // Top glossy bubble highlight
-            drawRoundRect(
-                color = Color.White.copy(alpha = 0.30f),
-                topLeft = Offset(w * 0.10f, h * 0.04f),
-                size = Size(w * 0.80f, h * 0.25f),
-                cornerRadius = CornerRadius(w * 0.22f, w * 0.22f)
+            drawCircle(
+                brush = Brush.radialGradient(
+                    colors = listOf(
+                        tile.type.primaryColor.copy(alpha = if (isSelected) 0.56f else if (isHinted) 0.40f else 0.16f),
+                        Color.Transparent
+                    ),
+                    center = Offset(w * 0.5f, h * 0.48f),
+                    radius = w * 0.52f
+                ),
+                radius = w * 0.52f,
+                center = Offset(w * 0.5f, h * 0.48f)
             )
-
-            when (tile.type) {
-                WasteType.PLASTIC_BLUE -> {
-                    // Contoured Plastic Water Bottle
-                    drawRoundRect(
-                        color = Color.White,
-                        topLeft = Offset(w * 0.36f, h * 0.07f),
-                        size = Size(w * 0.28f, h * 0.14f),
-                        cornerRadius = CornerRadius(4f, 4f)
-                    )
-                    drawRoundRect(
-                        color = Color(0xFFE0F2FE),
-                        topLeft = Offset(w * 0.25f, h * 0.23f),
-                        size = Size(w * 0.50f, h * 0.68f),
-                        cornerRadius = CornerRadius(w * 0.18f, w * 0.18f)
-                    )
-                    drawRect(
-                        color = Color(0xFF0284C7),
-                        topLeft = Offset(w * 0.25f, h * 0.45f),
-                        size = Size(w * 0.50f, h * 0.22f)
-                    )
-                    drawLine(
-                        color = Color.White.copy(alpha = 0.85f),
-                        start = Offset(w * 0.35f, h * 0.30f),
-                        end = Offset(w * 0.35f, h * 0.80f),
-                        strokeWidth = w * 0.07f,
-                        cap = StrokeCap.Round
-                    )
-                }
-
-                WasteType.GLASS_GREEN -> {
-                    // Slender Emerald Glass Bottle
-                    drawRoundRect(
-                        color = Color(0xFFFDE68A),
-                        topLeft = Offset(w * 0.40f, h * 0.07f),
-                        size = Size(w * 0.20f, h * 0.23f),
-                        cornerRadius = CornerRadius(4f, 4f)
-                    )
-                    drawRoundRect(
-                        color = Color(0xFFDCFCE7),
-                        topLeft = Offset(w * 0.24f, h * 0.31f),
-                        size = Size(w * 0.52f, h * 0.60f),
-                        cornerRadius = CornerRadius(w * 0.18f, w * 0.18f)
-                    )
-                    drawLine(
-                        color = Color(0xFF15803D),
-                        start = Offset(w * 0.37f, h * 0.43f),
-                        end = Offset(w * 0.37f, h * 0.80f),
-                        strokeWidth = w * 0.09f,
-                        cap = StrokeCap.Round
-                    )
-                }
-
-                WasteType.ALUMINUM_YELLOW -> {
-                    // Bright Soda Can with metallic rim & lightning emblem
-                    drawRoundRect(
-                        color = Color(0xFFE2E8F0),
-                        topLeft = Offset(w * 0.24f, h * 0.12f),
-                        size = Size(w * 0.52f, h * 0.14f),
-                        cornerRadius = CornerRadius(6f, 6f)
-                    )
-                    drawRoundRect(
-                        color = Color(0xFFFEF9C3),
-                        topLeft = Offset(w * 0.21f, h * 0.23f),
-                        size = Size(w * 0.58f, h * 0.66f),
-                        cornerRadius = CornerRadius(w * 0.13f, w * 0.13f)
-                    )
-                    val bolt = Path().apply {
-                        moveTo(w * 0.56f, h * 0.31f)
-                        lineTo(w * 0.37f, h * 0.56f)
-                        lineTo(w * 0.51f, h * 0.56f)
-                        lineTo(w * 0.43f, h * 0.79f)
-                        lineTo(w * 0.65f, h * 0.49f)
-                        lineTo(w * 0.50f, h * 0.49f)
-                        close()
-                    }
-                    drawPath(bolt, color = Color(0xFFD97706))
-                }
-
-                WasteType.ORGANIC_RED -> {
-                    // Organic Apple Core
-                    drawLine(
-                        color = Color(0xFF5D4037),
-                        start = Offset(w * 0.50f, h * 0.09f),
-                        end = Offset(w * 0.50f, h * 0.26f),
-                        strokeWidth = w * 0.09f,
-                        cap = StrokeCap.Round
-                    )
-                    drawOval(
-                        color = Color(0xFF4ADE80),
-                        topLeft = Offset(w * 0.52f, h * 0.07f),
-                        size = Size(w * 0.28f, h * 0.16f)
-                    )
-                    drawRoundRect(
-                        color = Color(0xFFFFF1F2),
-                        topLeft = Offset(w * 0.35f, h * 0.34f),
-                        size = Size(w * 0.30f, h * 0.36f),
-                        cornerRadius = CornerRadius(w * 0.10f, w * 0.10f)
-                    )
-                    drawOval(
-                        color = Color(0xFFFECDD3),
-                        topLeft = Offset(w * 0.21f, h * 0.21f),
-                        size = Size(w * 0.58f, h * 0.23f)
-                    )
-                    drawOval(
-                        color = Color(0xFFFECDD3),
-                        topLeft = Offset(w * 0.21f, h * 0.64f),
-                        size = Size(w * 0.58f, h * 0.23f)
-                    )
-                    drawCircle(color = Color(0xFF5D4037), radius = w * 0.055f, center = Offset(w * 0.44f, h * 0.52f))
-                    drawCircle(color = Color(0xFF5D4037), radius = w * 0.055f, center = Offset(w * 0.56f, h * 0.52f))
-                }
-
-                WasteType.CARDBOARD_TAN -> {
-                    // Cardboard Parcel Box with open flaps feel
-                    drawRoundRect(
-                        color = Color(0xFFFFEDD5),
-                        topLeft = Offset(w * 0.15f, h * 0.19f),
-                        size = Size(w * 0.70f, h * 0.66f),
-                        cornerRadius = CornerRadius(w * 0.10f, w * 0.10f)
-                    )
-                    drawRect(
-                        color = Color(0xFF9A5B25),
-                        topLeft = Offset(w * 0.43f, h * 0.19f),
-                        size = Size(w * 0.14f, h * 0.66f)
-                    )
-                    drawLine(
-                        color = Color(0xFF78350F),
-                        start = Offset(w * 0.15f, h * 0.42f),
-                        end = Offset(w * 0.85f, h * 0.42f),
-                        strokeWidth = w * 0.07f
-                    )
-                }
+            if (isHinted && !isSelected) {
+                drawCircle(
+                    color = GlowBeamGold.copy(alpha = 0.55f),
+                    radius = w * 0.44f,
+                    center = Offset(w * 0.5f, h * 0.5f),
+                    style = Stroke(width = 2.dp.toPx())
+                )
             }
+            drawOval(
+                color = Color.Black.copy(alpha = 0.36f),
+                topLeft = Offset(w * 0.18f, h * 0.78f),
+                size = Size(w * 0.64f, h * 0.16f)
+            )
+        }
 
-            // Special Power Tile Indicators (4-Match Line Blaster / 5-Match Eco-Bomb)
-            when (tile.special) {
-                SpecialTileType.LINE_H -> {
-                    drawLine(
-                        color = Color.White,
-                        start = Offset(w * 0.05f, h * 0.5f),
-                        end = Offset(w * 0.95f, h * 0.5f),
-                        strokeWidth = w * 0.15f,
-                        cap = StrokeCap.Round
-                    )
-                    drawCircle(GlowBeamGold, radius = w * 0.13f, center = Offset(w * 0.12f, h * 0.5f))
-                    drawCircle(GlowBeamGold, radius = w * 0.13f, center = Offset(w * 0.88f, h * 0.5f))
+        Image(
+            painter = painterResource(id = tile.type.spriteRes),
+            contentDescription = tile.type.displayName,
+            contentScale = ContentScale.Fit,
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(3.dp)
+        )
+
+        // Luminous special-tile energy effects on top when charged
+        if (tile.special != SpecialTileType.NONE) {
+            Canvas(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(2.dp)
+                    .graphicsLayer {
+                        if (tile.special == SpecialTileType.ECO_BOMB) {
+                            rotationZ = specialSpin
+                        }
+                    }
+            ) {
+                val w = size.width
+                val h = size.height
+                when (tile.special) {
+                    SpecialTileType.LINE_H -> {
+                        drawLine(
+                            brush = Brush.horizontalGradient(
+                                listOf(
+                                    GlowBeamGold.copy(alpha = specialPulse),
+                                    GlowBeamCore,
+                                    GlowBeamGold.copy(alpha = specialPulse)
+                                )
+                            ),
+                            start = Offset(w * 0.04f, h * 0.5f),
+                            end = Offset(w * 0.96f, h * 0.5f),
+                            strokeWidth = w * 0.12f,
+                            cap = StrokeCap.Round
+                        )
+                        drawCircle(GlowBeamGold.copy(alpha = specialPulse), radius = w * 0.13f, center = Offset(w * 0.10f, h * 0.5f))
+                        drawCircle(GlowBeamCore, radius = w * 0.06f, center = Offset(w * 0.10f, h * 0.5f))
+                        drawCircle(GlowBeamGold.copy(alpha = specialPulse), radius = w * 0.13f, center = Offset(w * 0.90f, h * 0.5f))
+                        drawCircle(GlowBeamCore, radius = w * 0.06f, center = Offset(w * 0.90f, h * 0.5f))
+                    }
+                    SpecialTileType.LINE_V -> {
+                        drawLine(
+                            brush = Brush.verticalGradient(
+                                listOf(
+                                    GlowBeamGold.copy(alpha = specialPulse),
+                                    GlowBeamCore,
+                                    GlowBeamGold.copy(alpha = specialPulse)
+                                )
+                            ),
+                            start = Offset(w * 0.5f, h * 0.04f),
+                            end = Offset(w * 0.5f, h * 0.96f),
+                            strokeWidth = w * 0.12f,
+                            cap = StrokeCap.Round
+                        )
+                        drawCircle(GlowBeamGold.copy(alpha = specialPulse), radius = w * 0.13f, center = Offset(w * 0.5f, h * 0.10f))
+                        drawCircle(GlowBeamCore, radius = w * 0.06f, center = Offset(w * 0.5f, h * 0.10f))
+                        drawCircle(GlowBeamGold.copy(alpha = specialPulse), radius = w * 0.13f, center = Offset(w * 0.5f, h * 0.90f))
+                        drawCircle(GlowBeamCore, radius = w * 0.06f, center = Offset(w * 0.5f, h * 0.90f))
+                    }
+                    SpecialTileType.ECO_BOMB -> {
+                        drawCircle(
+                            brush = Brush.sweepGradient(listOf(GlowBeamGold, CeramicBlueTop, GlowBeamCore, GlowBeamGold)),
+                            radius = w * 0.42f,
+                            style = Stroke(width = w * 0.10f)
+                        )
+                        drawCircle(
+                            color = GlowBeamCore.copy(alpha = 0.72f * specialPulse),
+                            radius = w * 0.15f
+                        )
+                    }
+                    SpecialTileType.NONE -> {}
                 }
-                SpecialTileType.LINE_V -> {
-                    drawLine(
-                        color = Color.White,
-                        start = Offset(w * 0.5f, h * 0.05f),
-                        end = Offset(w * 0.5f, h * 0.95f),
-                        strokeWidth = w * 0.15f,
-                        cap = StrokeCap.Round
-                    )
-                    drawCircle(GlowBeamGold, radius = w * 0.13f, center = Offset(w * 0.5f, h * 0.12f))
-                    drawCircle(GlowBeamGold, radius = w * 0.13f, center = Offset(w * 0.5f, h * 0.88f))
-                }
-                SpecialTileType.ECO_BOMB -> {
-                    drawCircle(
-                        color = GlowBeamGold,
-                        radius = w * 0.38f,
-                        style = Stroke(width = w * 0.13f)
-                    )
-                    drawCircle(
-                        color = Color.White,
-                        radius = w * 0.18f
-                    )
-                }
-                SpecialTileType.NONE -> {}
             }
         }
     }
@@ -573,9 +533,11 @@ fun BossMonsterAvatar(
     hitFlash: Boolean = false,
     isMiniTrashWave: Boolean = false,
     waveIndex: Int = 3,
-    animateIdle: Boolean = true
+    animateIdle: Boolean = true,
+    @androidx.annotation.DrawableRes spriteOverride: Int? = null
 ) {
     val spriteRes = when {
+        spriteOverride != null -> spriteOverride
         isMiniTrashWave && waveIndex <= 1 -> GameCatalog.miniWave1Sprite
         isMiniTrashWave -> GameCatalog.miniWave2Sprite
         else -> boss.spriteRes
@@ -667,15 +629,22 @@ fun BossCardTile(
             .clip(RoundedCornerShape(18.dp))
             .clickable(onClick = onClick),
         shape = RoundedCornerShape(18.dp),
-        color = if (unlocked) SurfaceWhite else Color(0xFFDCE5F2),
+        color = if (unlocked) DarkSurfaceCard else Color(0xFF0A162D),
         border = BorderStroke(
-            width = if (isEquipped) 3.dp else 2.dp,
-            color = if (isEquipped) EcoEmerald else boss.rarity.frameColor
+            width = if (isEquipped) 3.dp else 1.8.dp,
+            color = if (isEquipped) EcoEmeraldBright else if (unlocked) boss.rarity.frameColor else DarkBorderSubtle
         ),
-        shadowElevation = if (unlocked) 5.dp else 1.dp
+        shadowElevation = if (unlocked) 8.dp else 2.dp
     ) {
         Column(
-            modifier = Modifier.padding(8.dp),
+            modifier = Modifier
+                .background(
+                    Brush.verticalGradient(
+                        if (unlocked) listOf(Color(0xFF162C56), DarkSurfaceCard)
+                        else listOf(Color(0xFF0C1A36), Color(0xFF071022))
+                    )
+                )
+                .padding(8.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             Row(
@@ -698,14 +667,14 @@ fun BossCardTile(
                 if (unlocked) {
                     Text(
                         text = "Lv.$level",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = DeepNavyInk
+                        style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.ExtraBold),
+                        color = SaffronGold
                     )
                 } else {
                     Icon(
                         imageVector = Icons.Default.Lock,
                         contentDescription = "Locked",
-                        tint = MutedSlateText,
+                        tint = TextMutedOnDark,
                         modifier = Modifier.size(14.dp)
                     )
                 }
@@ -720,7 +689,7 @@ fun BossCardTile(
                     .background(
                         Brush.radialGradient(
                             listOf(
-                                boss.bodyColor.copy(alpha = if (unlocked) 0.24f else 0.08f),
+                                boss.bodyColor.copy(alpha = if (unlocked) 0.30f else 0.14f),
                                 Color.Transparent
                             )
                         )
@@ -730,7 +699,9 @@ fun BossCardTile(
                 BossMonsterAvatar(
                     boss = boss,
                     animateIdle = false,
-                    modifier = Modifier.size(58.dp)
+                    modifier = Modifier
+                        .size(58.dp)
+                        .alpha(if (unlocked) 1f else 0.55f)
                 )
             }
 
@@ -738,8 +709,8 @@ fun BossCardTile(
 
             Text(
                 text = boss.name,
-                style = MaterialTheme.typography.labelMedium,
-                color = DeepNavyInk,
+                style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                color = if (unlocked) TextOnDark else TextMutedOnDark,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
                 textAlign = TextAlign.Center
@@ -754,14 +725,14 @@ fun BossCardTile(
                         .fillMaxWidth()
                         .height(15.dp)
                         .clip(RoundedCornerShape(50))
-                        .background(Color(0xFFE2E8F0))
-                        .border(1.dp, DeepNavyInk, RoundedCornerShape(50))
+                        .background(Color(0xFF061022))
+                        .border(1.dp, DarkBorderSubtle, RoundedCornerShape(50))
                 ) {
                     Box(
                         modifier = Modifier
                             .fillMaxHeight()
                             .fillMaxWidth(frac)
-                            .background(if (canUpgrade) EcoEmerald else SidiCobalt)
+                            .background(if (canUpgrade) EcoEmerald else CeramicBlueBottom)
                     )
                     Row(
                         modifier = Modifier.fillMaxSize(),
@@ -778,8 +749,8 @@ fun BossCardTile(
                         }
                         Text(
                             text = "$copies/$needed",
-                            style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp),
-                            color = if (frac > 0.45f) Color.White else DeepNavyInk
+                            style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp, fontWeight = FontWeight.Bold),
+                            color = Color.White
                         )
                     }
                 }
@@ -787,12 +758,25 @@ fun BossCardTile(
                 Text(
                     text = "Arena ${boss.arenaId}",
                     style = MaterialTheme.typography.labelSmall,
-                    color = MutedSlateText
+                    color = TextMutedOnDark
                 )
             }
         }
     }
 }
+
+private data class ActivePopBurst(
+    val key: Long,
+    val tiles: List<Pair<GridPos, WasteType>>,
+    val progress: Animatable<Float, AnimationVector1D>
+)
+
+private data class PositionedBoardTile(
+    val uniqueKey: Long,
+    val row: Int,
+    val col: Int,
+    val tile: BoardTile
+)
 
 @Composable
 fun Match3BoardGrid(
@@ -802,102 +786,377 @@ fun Match3BoardGrid(
     onTileTap: (GridPos) -> Unit = {},
     onTileSwipe: (GridPos, GridPos) -> Unit = { _, _ -> },
     useSandstoneTheme: Boolean = true,
+    invalidSwapPair: Pair<GridPos, GridPos>? = null,
+    invalidSwapToken: Long = 0L,
+    popBurstTiles: List<Pair<GridPos, WasteType>> = emptyList(),
+    popBurstToken: Long = 0L,
+    hintPair: Pair<GridPos, GridPos>? = null,
     modifier: Modifier = Modifier
 ) {
-    val frameOuter = if (useSandstoneTheme) SandBoardOuter else BattleBoardDark
-    val frameBorder = if (useSandstoneTheme) SandBoardBorder else DeepNavyInk
-    val cellLight = if (useSandstoneTheme) SandCellLight else BattleBoardCell
-    val cellDark = if (useSandstoneTheme) SandCellDark else BattleBoardCellAlt
+    // Royal-Match-style double-beveled obsidian-sapphire & champagne-gold jewel board
+    val cellLight = Color(0xFF162F61)
+    val cellDark = Color(0xFF0F234B)
+    val density = LocalDensity.current
+    val swipeThresholdPx = with(density) { 18.dp.toPx() }
+    val seenIds = remember { mutableSetOf<Long>() }
+    var boardInitialized by remember { mutableStateOf(false) }
+    val activeBursts = remember { mutableStateListOf<ActivePopBurst>() }
+
+    LaunchedEffect(popBurstToken) {
+        if (popBurstToken > 0L && popBurstTiles.isNotEmpty()) {
+            val anim = Animatable(0f)
+            val entry = ActivePopBurst(popBurstToken, popBurstTiles, anim)
+            activeBursts.add(entry)
+            launch {
+                try {
+                    anim.animateTo(1f, tween(durationMillis = 420, easing = FastOutSlowInEasing))
+                } finally {
+                    activeBursts.remove(entry)
+                }
+            }
+        }
+    }
+
+    val positionedTiles = remember(board) {
+        val used = HashSet<Long>(BOARD_SIZE * BOARD_SIZE)
+        buildList(BOARD_SIZE * BOARD_SIZE) {
+            for (r in 0 until BOARD_SIZE) {
+                for (c in 0 until BOARD_SIZE) {
+                    val t = board.getOrNull(r)?.getOrNull(c) ?: BoardTile(-(r * 100L + c + 1L), WasteType.PLASTIC_BLUE)
+                    val k = if (used.add(t.id)) t.id else -(r * 100L + c + 1L)
+                    add(PositionedBoardTile(k, r, c, t))
+                }
+            }
+        }
+    }
+
+    SideEffect {
+        boardInitialized = true
+        positionedTiles.forEach { seenIds.add(it.uniqueKey) }
+    }
 
     Surface(
         modifier = modifier
             .aspectRatio(1f)
             .testTag("match3_board_grid"),
-        shape = RoundedCornerShape(20.dp),
-        color = frameOuter,
-        border = BorderStroke(3.5.dp, frameBorder),
-        shadowElevation = 8.dp
+        shape = RoundedCornerShape(24.dp),
+        color = Color(0xFF060E20),
+        border = BorderStroke(
+            3.5.dp,
+            Brush.linearGradient(listOf(GlowBeamGold, SaffronGold, Color(0xFF9E6B14), SaffronGold))
+        ),
+        shadowElevation = 16.dp
     ) {
         Box(
             modifier = Modifier
                 .fillMaxSize()
                 .background(
-                    if (useSandstoneTheme) {
-                        Brush.verticalGradient(listOf(SandBoardOuter, SandBoardInner))
-                    } else {
-                        Brush.verticalGradient(listOf(BattleBoardDark, BattleBoardDark))
-                    }
+                    Brush.verticalGradient(
+                        listOf(Color(0xFF10244D), Color(0xFF060E20))
+                    )
                 )
-                .padding(6.dp)
+                .padding(4.dp)
+                .clip(RoundedCornerShape(20.dp))
+                .background(Color(0xFF060E20))
+                .border(1.2.dp, SaffronGold.copy(alpha = 0.38f), RoundedCornerShape(20.dp))
+                .padding(5.dp)
         ) {
-            Column(
-                modifier = Modifier.fillMaxSize(),
-                verticalArrangement = Arrangement.SpaceBetween
-            ) {
-                for (r in 0 until BOARD_SIZE) {
-                    Row(
-                        modifier = Modifier
-                            .weight(1f)
-                            .fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        for (c in 0 until BOARD_SIZE) {
-                            val pos = GridPos(r, c)
-                            val tile = board.getOrNull(r)?.getOrNull(c) ?: BoardTile(0L, WasteType.PLASTIC_BLUE)
-                            val isSel = selectedTile == pos
-                            val cellBg = if ((r + c) % 2 == 0) cellLight else cellDark
+            // Subtle champagne-gold corner diamond filigree rivets
+            Canvas(modifier = Modifier.fillMaxSize()) {
+                val inset = 4.dp.toPx()
+                val r = 2.8.dp.toPx()
+                listOf(
+                    Offset(inset, inset),
+                    Offset(size.width - inset, inset),
+                    Offset(inset, size.height - inset),
+                    Offset(size.width - inset, size.height - inset)
+                ).forEach { c ->
+                    val diamond = Path().apply {
+                        moveTo(c.x, c.y - r)
+                        lineTo(c.x + r, c.y)
+                        lineTo(c.x, c.y + r)
+                        lineTo(c.x - r, c.y)
+                        close()
+                    }
+                    drawPath(diamond, color = GlowBeamGold.copy(alpha = 0.72f))
+                }
+            }
 
-                            var dragAccumX by remember(r, c, tile.id) { mutableFloatStateOf(0f) }
-                            var dragAccumY by remember(r, c, tile.id) { mutableFloatStateOf(0f) }
-                            var swipeTriggered by remember(r, c, tile.id) { mutableStateOf(false) }
+            BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+                val cellW = constraints.maxWidth / BOARD_SIZE.toFloat()
+                val cellH = constraints.maxHeight / BOARD_SIZE.toFloat()
+                val cellWDp = maxWidth / BOARD_SIZE
+                val cellHDp = maxHeight / BOARD_SIZE
 
-                            Box(
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .fillMaxHeight()
-                                    .padding(1.2.dp)
-                                    .clip(RoundedCornerShape(10.dp))
-                                    .background(if (isSel) GlowBeamGold.copy(alpha = 0.45f) else cellBg)
-                                    .then(
-                                        if (interactive) {
-                                            Modifier
-                                                .clickable { onTileTap(pos) }
-                                                .pointerInput(r, c, tile.id) {
-                                                    detectDragGestures(
-                                                        onDragStart = {
-                                                            dragAccumX = 0f
-                                                            dragAccumY = 0f
-                                                            swipeTriggered = false
-                                                        },
-                                                        onDrag = { change, dragAmount ->
-                                                            change.consume()
-                                                            if (swipeTriggered) return@detectDragGestures
-                                                            dragAccumX += dragAmount.x
-                                                            dragAccumY += dragAmount.y
-                                                            val threshold = 22f
-                                                            if (abs(dragAccumX) > threshold || abs(dragAccumY) > threshold) {
-                                                                swipeTriggered = true
-                                                                val target = if (abs(dragAccumX) > abs(dragAccumY)) {
-                                                                    val dc = if (dragAccumX > 0) 1 else -1
-                                                                    GridPos(r, (c + dc).coerceIn(0, BOARD_SIZE - 1))
-                                                                } else {
-                                                                    val dr = if (dragAccumY > 0) 1 else -1
-                                                                    GridPos((r + dr).coerceIn(0, BOARD_SIZE - 1), c)
-                                                                }
-                                                                if (target != pos) onTileSwipe(pos, target)
+                // Layer 1: Static 7x7 Recessed Cell Wells
+                Column(
+                    modifier = Modifier.fillMaxSize(),
+                    verticalArrangement = Arrangement.SpaceBetween
+                ) {
+                    for (r in 0 until BOARD_SIZE) {
+                        Row(
+                            modifier = Modifier
+                                .weight(1f)
+                                .fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            for (c in 0 until BOARD_SIZE) {
+                                val pos = GridPos(r, c)
+                                val isSel = selectedTile == pos
+                                val isHint = hintPair?.let { it.first == pos || it.second == pos } == true
+                                val cellBg = if ((r + c) % 2 == 0) cellLight else cellDark
+
+                                Box(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .fillMaxHeight()
+                                        .padding(1.3.dp)
+                                        .clip(RoundedCornerShape(10.dp))
+                                        .background(
+                                            when {
+                                                isSel -> Brush.radialGradient(listOf(GlowBeamGold.copy(alpha = 0.36f), cellBg))
+                                                isHint -> Brush.radialGradient(listOf(EcoEmeraldBright.copy(alpha = 0.25f), cellBg))
+                                                else -> Brush.verticalGradient(listOf(Color(0xFF09142B), cellBg))
+                                            }
+                                        )
+                                        .border(
+                                            width = if (isSel) 2.dp else if (isHint) 1.5.dp else 0.8.dp,
+                                            color = when {
+                                                isSel -> GlowBeamGold
+                                                isHint -> EcoEmeraldBright.copy(alpha = 0.85f)
+                                                else -> Color.White.copy(alpha = 0.08f)
+                                            },
+                                            shape = RoundedCornerShape(10.dp)
+                                        )
+                                )
+                            }
+                        }
+                    }
+                }
+
+                // Layer 2: Keyed Floating Spring-Physics Tiles
+                positionedTiles.forEach { item ->
+                    key(item.uniqueKey) {
+                        val targetX = item.col * cellW
+                        val targetY = item.row * cellH
+                        val isNewSpawn = boardInitialized && item.uniqueKey !in seenIds
+
+                        val animX = remember { Animatable(targetX) }
+                        val animY = remember { Animatable(if (isNewSpawn) targetY - cellH * 1.45f else targetY) }
+                        val alphaAnim = remember { Animatable(if (isNewSpawn) 0f else 1f) }
+                        val recoilX = remember { Animatable(0f) }
+                        val recoilY = remember { Animatable(0f) }
+                        val dragX = remember { Animatable(0f) }
+                        val dragY = remember { Animatable(0f) }
+
+                        LaunchedEffect(Unit) {
+                            if (isNewSpawn) {
+                                delay(item.col * 14L)
+                                launch { alphaAnim.animateTo(1f, tween(130)) }
+                                launch {
+                                    animY.animateTo(
+                                        targetY,
+                                        spring(dampingRatio = 0.68f, stiffness = 360f)
+                                    )
+                                }
+                            }
+                        }
+
+                        LaunchedEffect(item.row, item.col, cellW, cellH) {
+                            if (abs(animX.targetValue - targetX) > 0.5f) {
+                                launch {
+                                    animX.animateTo(
+                                        targetX,
+                                        spring(dampingRatio = 0.76f, stiffness = 520f)
+                                    )
+                                }
+                            }
+                            if (abs(animY.targetValue - targetY) > 0.5f) {
+                                launch {
+                                    animY.animateTo(
+                                        targetY,
+                                        spring(dampingRatio = 0.68f, stiffness = 370f)
+                                    )
+                                }
+                            }
+                        }
+
+                        val pos = GridPos(item.row, item.col)
+                        LaunchedEffect(invalidSwapToken) {
+                            val pair = invalidSwapPair
+                            if (invalidSwapToken > 0L && pair != null && (pair.first == pos || pair.second == pos)) {
+                                val partner = if (pair.first == pos) pair.second else pair.first
+                                val dx = (partner.col - pos.col) * cellW * 0.42f
+                                val dy = (partner.row - pos.row) * cellH * 0.42f
+                                launch {
+                                    recoilX.animateTo(dx, tween(95, easing = FastOutSlowInEasing))
+                                    recoilX.animateTo(0f, spring(dampingRatio = 0.48f, stiffness = 620f))
+                                }
+                                launch {
+                                    recoilY.animateTo(dy, tween(95, easing = FastOutSlowInEasing))
+                                    recoilY.animateTo(0f, spring(dampingRatio = 0.48f, stiffness = 620f))
+                                }
+                            }
+                        }
+
+                        val dragScope = rememberCoroutineScope()
+                        val isSel = selectedTile == pos
+                        val isHint = hintPair?.let { it.first == pos || it.second == pos } == true
+                        val maxRubberBand = cellW * 0.44f
+                        val interactionSource = remember { MutableInteractionSource() }
+
+                        var rawDragX by remember(item.row, item.col, item.uniqueKey) { mutableFloatStateOf(0f) }
+                        var rawDragY by remember(item.row, item.col, item.uniqueKey) { mutableFloatStateOf(0f) }
+                        var swipeTriggered by remember(item.row, item.col, item.uniqueKey) { mutableStateOf(false) }
+
+                        Box(
+                            modifier = Modifier
+                                .offset {
+                                    IntOffset(
+                                        x = (animX.value + recoilX.value + dragX.value).roundToInt(),
+                                        y = (animY.value + recoilY.value + dragY.value).roundToInt()
+                                    )
+                                }
+                                .size(cellWDp, cellHDp)
+                                .padding(1.3.dp)
+                                .graphicsLayer { alpha = alphaAnim.value }
+                                .then(
+                                    if (interactive) {
+                                        Modifier
+                                            .clickable(
+                                                interactionSource = interactionSource,
+                                                indication = null
+                                            ) { onTileTap(pos) }
+                                            .pointerInput(item.row, item.col, item.uniqueKey) {
+                                                detectDragGestures(
+                                                    onDragStart = {
+                                                        rawDragX = 0f
+                                                        rawDragY = 0f
+                                                        swipeTriggered = false
+                                                    },
+                                                    onDragCancel = {
+                                                        dragScope.launch {
+                                                            launch { dragX.animateTo(0f, spring(0.58f, 520f)) }
+                                                            launch { dragY.animateTo(0f, spring(0.58f, 520f)) }
+                                                        }
+                                                    },
+                                                    onDragEnd = {
+                                                        dragScope.launch {
+                                                            launch { dragX.animateTo(0f, spring(0.58f, 520f)) }
+                                                            launch { dragY.animateTo(0f, spring(0.58f, 520f)) }
+                                                        }
+                                                    },
+                                                    onDrag = { change, dragAmount ->
+                                                        change.consume()
+                                                        if (swipeTriggered) return@detectDragGestures
+                                                        rawDragX += dragAmount.x
+                                                        rawDragY += dragAmount.y
+                                                        if (abs(rawDragX) >= abs(rawDragY)) {
+                                                            val clamped = rawDragX.coerceIn(-maxRubberBand, maxRubberBand)
+                                                            dragScope.launch {
+                                                                dragX.snapTo(clamped)
+                                                                dragY.snapTo(0f)
+                                                            }
+                                                        } else {
+                                                            val clamped = rawDragY.coerceIn(-maxRubberBand, maxRubberBand)
+                                                            dragScope.launch {
+                                                                dragY.snapTo(clamped)
+                                                                dragX.snapTo(0f)
                                                             }
                                                         }
-                                                    )
-                                                }
-                                        } else Modifier
-                                    ),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                RecyclableTileArt(
-                                    tile = tile,
-                                    isSelected = isSel,
-                                    modifier = Modifier.fillMaxSize()
+                                                        if (abs(rawDragX) > swipeThresholdPx || abs(rawDragY) > swipeThresholdPx) {
+                                                            swipeTriggered = true
+                                                            val target = if (abs(rawDragX) > abs(rawDragY)) {
+                                                                val dc = if (rawDragX > 0) 1 else -1
+                                                                GridPos(item.row, (item.col + dc).coerceIn(0, BOARD_SIZE - 1))
+                                                            } else {
+                                                                val dr = if (rawDragY > 0) 1 else -1
+                                                                GridPos((item.row + dr).coerceIn(0, BOARD_SIZE - 1), item.col)
+                                                            }
+                                                            dragScope.launch {
+                                                                launch { dragX.animateTo(0f, spring(0.68f, 600f)) }
+                                                                launch { dragY.animateTo(0f, spring(0.68f, 600f)) }
+                                                            }
+                                                            if (target != pos) onTileSwipe(pos, target)
+                                                        }
+                                                    }
+                                                )
+                                            }
+                                    } else Modifier
+                                ),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            RecyclableTileArt(
+                                tile = item.tile,
+                                isSelected = isSel,
+                                isHinted = isHint,
+                                modifier = Modifier.fillMaxSize()
+                            )
+                        }
+                    }
+                }
+
+                // Layer 3: Non-Blocking Match Pop Particle Bursts & Shockwaves
+                if (activeBursts.isNotEmpty()) {
+                    Canvas(modifier = Modifier.fillMaxSize()) {
+                        activeBursts.forEach { burst ->
+                            val t = burst.progress.value
+                            val inv = (1f - t).coerceIn(0f, 1f)
+                            burst.tiles.forEach { (pos, wasteType) ->
+                                val cx = (pos.col + 0.5f) * cellW
+                                val cy = (pos.row + 0.5f) * cellH
+                                val center = Offset(cx, cy)
+                                val baseCol = wasteType.primaryColor
+
+                                // Expanding colored + gold shockwave ring
+                                val ringRadius = cellW * (0.18f + 0.54f * t)
+                                drawCircle(
+                                    color = baseCol.copy(alpha = 0.72f * inv),
+                                    radius = ringRadius,
+                                    center = center,
+                                    style = Stroke(width = (3.5f * inv + 1f).dp.toPx())
                                 )
+                                drawCircle(
+                                    color = GlowBeamGold.copy(alpha = 0.55f * inv),
+                                    radius = ringRadius * 0.78f,
+                                    center = center,
+                                    style = Stroke(width = 2.dp.toPx())
+                                )
+
+                                // 8 radial sparkle droplets flying outward
+                                val dropletR = (4.5f - 4.0f * t).coerceAtLeast(0.5f).dp.toPx()
+                                val dist = cellW * 0.68f * t
+                                for (i in 0 until 8) {
+                                    val ang = i * (Math.PI / 4.0) + pos.row * 0.3
+                                    val px = cx + (cos(ang) * dist).toFloat()
+                                    val py = cy + (sin(ang) * dist).toFloat() - (1f - t) * 4.dp.toPx()
+                                    val dotCol = if (i % 2 == 0) GlowBeamGold else baseCol
+                                    drawCircle(
+                                        color = dotCol.copy(alpha = inv),
+                                        radius = dropletR,
+                                        center = Offset(px, py)
+                                    )
+                                }
+
+                                // Crisp 4-point white starburst flash in early pop phase
+                                if (t < 0.35f) {
+                                    val flashAlpha = ((0.35f - t) / 0.35f).coerceIn(0f, 1f)
+                                    val ray = cellW * 0.42f * (1f - t)
+                                    drawLine(
+                                        color = Color.White.copy(alpha = flashAlpha),
+                                        start = Offset(cx - ray, cy),
+                                        end = Offset(cx + ray, cy),
+                                        strokeWidth = 3.dp.toPx(),
+                                        cap = StrokeCap.Round
+                                    )
+                                    drawLine(
+                                        color = Color.White.copy(alpha = flashAlpha),
+                                        start = Offset(cx, cy - ray),
+                                        end = Offset(cx, cy + ray),
+                                        strokeWidth = 3.dp.toPx(),
+                                        cap = StrokeCap.Round
+                                    )
+                                }
                             }
                         }
                     }
@@ -913,7 +1172,7 @@ fun RarityChip(rarity: BossRarity, modifier: Modifier = Modifier) {
         modifier = modifier
             .clip(RoundedCornerShape(50))
             .background(rarity.frameColor)
-            .border(1.5.dp, DeepNavyInk, RoundedCornerShape(50))
+            .border(1.dp, Color.White.copy(alpha = 0.38f), RoundedCornerShape(50))
             .padding(horizontal = 8.dp, vertical = 2.dp)
     ) {
         Text(
@@ -929,8 +1188,8 @@ fun EcoBrandBadge(modifier: Modifier = Modifier) {
     Surface(
         modifier = modifier,
         shape = RoundedCornerShape(50),
-        color = EcoMintSoft,
-        border = BorderStroke(1.5.dp, DeepNavyInk)
+        color = EcoEmerald.copy(alpha = 0.22f),
+        border = BorderStroke(1.5.dp, EcoEmeraldBright)
     ) {
         Row(
             modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
@@ -939,20 +1198,20 @@ fun EcoBrandBadge(modifier: Modifier = Modifier) {
             Icon(
                 imageVector = Icons.Default.Recycling,
                 contentDescription = null,
-                tint = EcoEmeraldDark,
+                tint = EcoEmeraldBright,
                 modifier = Modifier.size(16.dp)
             )
             Spacer(Modifier.width(4.dp))
             Text(
                 text = "TUNISIA ECO-ARENA",
                 style = MaterialTheme.typography.labelSmall,
-                color = DeepNavyInk
+                color = TextOnDark
             )
             Spacer(Modifier.width(4.dp))
             Icon(
                 imageVector = Icons.Default.Bolt,
                 contentDescription = null,
-                tint = SaffronGoldDark,
+                tint = SaffronGold,
                 modifier = Modifier.size(14.dp)
             )
         }

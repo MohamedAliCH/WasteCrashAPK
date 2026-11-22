@@ -35,6 +35,21 @@ data class MatchResolution(
     val spawnedSpecialCount: Int
 )
 
+data class CascadeStep(
+    val matchedPositions: Set<GridPos>,
+    val clearedTiles: List<Pair<GridPos, WasteType>>,
+    val boardAfterGravity: List<List<BoardTile>>,
+    val comboIndex: Int,
+    val countsByType: Map<WasteType, Int>,
+    val spawnedSpecialCount: Int
+)
+
+data class SteppedMatchResolution(
+    val swappedBoard: List<List<BoardTile>>,
+    val steps: List<CascadeStep>,
+    val finalResolution: MatchResolution
+)
+
 data class MatchTelemetry(
     val won: Boolean,
     val arenaId: Int,
@@ -51,12 +66,18 @@ data class MatchTelemetry(
 )
 
 object Match3Engine {
-    private var nextTileId = 1L
+    // Starts above the positional ids used by decodeBoardFlat (1..49) so keys never collide.
+    private var nextTileId = 1_000L
 
+    @Synchronized
     private fun nextId(): Long {
         nextTileId += 1L
         return nextTileId
     }
+
+    /** Shared placeholder board for default state objects (avoids generating boards on every copy). */
+    val DEFAULT_BOARD: List<List<BoardTile>> by lazy { createInitialBoard(Random(7)) }
+    val DEFAULT_BOARD_FLAT: List<Int> by lazy { encodeBoardFlat(DEFAULT_BOARD) }
 
     fun createInitialBoard(random: Random = Random.Default): List<List<BoardTile>> {
         val types = WasteType.entries
@@ -123,7 +144,14 @@ object Match3Engine {
         a: GridPos,
         b: GridPos,
         random: Random = Random.Default
-    ): MatchResolution? {
+    ): MatchResolution? = attemptSwapSteps(board, a, b, random)?.finalResolution
+
+    fun attemptSwapSteps(
+        board: List<List<BoardTile>>,
+        a: GridPos,
+        b: GridPos,
+        random: Random = Random.Default
+    ): SteppedMatchResolution? {
         if (!areAdjacent(a, b)) return null
         val mutable = board.map { it.toMutableList() }.toMutableList()
         val tileA = mutable[a.row][a.col]
@@ -138,8 +166,10 @@ object Match3Engine {
             return null
         }
 
+        val swappedSnapshot = mutable.map { it.toList() }
         val totalCounts = mutableMapOf<WasteType, Int>()
         val allMatchedPositions = mutableSetOf<GridPos>()
+        val steps = mutableListOf<CascadeStep>()
         var totalCleared = 0
         var comboCount = 0
         var spawnedSpecials = 0
@@ -153,59 +183,36 @@ object Match3Engine {
             if (tileB.special != SpecialTileType.NONE) {
                 burst.addAll(expandSpecial(mutable, a, tileB.special))
             }
+            val stepCounts = mutableMapOf<WasteType, Int>()
+            val clearedPairs = ArrayList<Pair<GridPos, WasteType>>(burst.size)
             allMatchedPositions.addAll(burst)
             for (pos in burst) {
                 val t = mutable[pos.row][pos.col]
                 totalCounts[t.type] = (totalCounts[t.type] ?: 0) + 1
+                stepCounts[t.type] = (stepCounts[t.type] ?: 0) + 1
+                clearedPairs.add(pos to t.type)
             }
             totalCleared += burst.size
             refillCleared(mutable, burst, emptyMap(), random)
+            steps.add(
+                CascadeStep(
+                    matchedPositions = burst.toSet(),
+                    clearedTiles = clearedPairs,
+                    boardAfterGravity = mutable.map { it.toList() },
+                    comboIndex = comboCount,
+                    countsByType = stepCounts,
+                    spawnedSpecialCount = 0
+                )
+            )
         }
 
-        while (true) {
-            val groups = findMatchGroups(mutable)
-            if (groups.isEmpty()) break
-            comboCount++
-
-            val toClear = mutableSetOf<GridPos>()
-            val spawns = mutableMapOf<GridPos, BoardTile>()
-
-            for (group in groups) {
-                toClear.addAll(group.positions)
-                if (group.positions.size >= 5) {
-                    val anchor = group.positions[group.positions.size / 2]
-                    spawns[anchor] = BoardTile(nextId(), group.type, SpecialTileType.ECO_BOMB)
-                    spawnedSpecials++
-                } else if (group.positions.size == 4) {
-                    val anchor = group.positions[1]
-                    val spec = if (group.horizontal) SpecialTileType.LINE_H else SpecialTileType.LINE_V
-                    spawns[anchor] = BoardTile(nextId(), group.type, spec)
-                    spawnedSpecials++
-                }
-            }
-
-            // Expand any special tiles caught in the match
-            val extraBurst = mutableSetOf<GridPos>()
-            for (pos in toClear) {
-                val tile = mutable[pos.row][pos.col]
-                if (tile.special != SpecialTileType.NONE) {
-                    extraBurst.addAll(expandSpecial(mutable, pos, tile.special))
-                }
-            }
-            toClear.addAll(extraBurst)
-
-            allMatchedPositions.addAll(toClear)
-            for (pos in toClear) {
-                val tile = mutable[pos.row][pos.col]
-                totalCounts[tile.type] = (totalCounts[tile.type] ?: 0) + 1
-            }
-            totalCleared += toClear.size
-            refillCleared(mutable, toClear, spawns, random)
-            if (comboCount >= 10) break
-        }
+        val cascadeCounts = resolveCascadeSteps(mutable, steps, allMatchedPositions, totalCounts, comboCount, random)
+        comboCount = cascadeCounts.first
+        totalCleared += cascadeCounts.second
+        spawnedSpecials += cascadeCounts.third
 
         val finalBoard = ensurePlayableBoard(mutable.map { it.toList() }, random)
-        return MatchResolution(
+        val resolution = MatchResolution(
             newBoard = finalBoard,
             matchedPositions = allMatchedPositions,
             countsByType = totalCounts,
@@ -213,13 +220,25 @@ object Match3Engine {
             comboCount = comboCount.coerceAtLeast(1),
             spawnedSpecialCount = spawnedSpecials
         )
+        return SteppedMatchResolution(
+            swappedBoard = swappedSnapshot,
+            steps = steps,
+            finalResolution = resolution
+        )
     }
 
     fun applyBossAbility(
         board: List<List<BoardTile>>,
         boss: BossDefinition,
         random: Random = Random.Default
-    ): MatchResolution {
+    ): MatchResolution = applyBossAbilitySteps(board, boss, random).finalResolution
+
+    fun applyBossAbilitySteps(
+        board: List<List<BoardTile>>,
+        boss: BossDefinition,
+        random: Random = Random.Default
+    ): SteppedMatchResolution {
+        val initialSnapshot = board.map { it.toList() }
         val mutable = board.map { it.toMutableList() }.toMutableList()
         val burst = mutableSetOf<GridPos>()
 
@@ -267,37 +286,119 @@ object Match3Engine {
         }
 
         val counts = mutableMapOf<WasteType, Int>()
+        val clearedPairs = ArrayList<Pair<GridPos, WasteType>>(burst.size)
         for (pos in burst) {
             val t = mutable[pos.row][pos.col]
             counts[t.type] = (counts[t.type] ?: 0) + 1
+            clearedPairs.add(pos to t.type)
         }
         var totalCleared = burst.size
         refillCleared(mutable, burst, emptyMap(), random)
 
-        // Resolve any cascades triggered by the ability!
-        var combos = 1
-        while (combos < 6) {
-            val groups = findMatchGroups(mutable)
-            if (groups.isEmpty()) break
-            combos++
-            val cascadeClear = groups.flatMap { it.positions }.toSet()
-            for (pos in cascadeClear) {
-                val t = mutable[pos.row][pos.col]
-                counts[t.type] = (counts[t.type] ?: 0) + 1
-            }
-            totalCleared += cascadeClear.size
-            refillCleared(mutable, cascadeClear, emptyMap(), random)
-        }
+        val steps = mutableListOf(
+            CascadeStep(
+                matchedPositions = burst.toSet(),
+                clearedTiles = clearedPairs,
+                boardAfterGravity = mutable.map { it.toList() },
+                comboIndex = 1,
+                countsByType = counts.toMap(),
+                spawnedSpecialCount = 0
+            )
+        )
+
+        val allMatched = burst.toMutableSet()
+        val cascadeCounts = resolveCascadeSteps(mutable, steps, allMatched, counts, startCombo = 1, random = random, maxCombo = 6)
+        val combos = cascadeCounts.first
+        totalCleared += cascadeCounts.second
 
         val finalBoard = ensurePlayableBoard(mutable.map { it.toList() }, random)
-        return MatchResolution(
+        val resolution = MatchResolution(
             newBoard = finalBoard,
             matchedPositions = burst,
             countsByType = counts,
             totalCleared = totalCleared,
             comboCount = combos,
-            spawnedSpecialCount = 0
+            spawnedSpecialCount = cascadeCounts.third
         )
+        return SteppedMatchResolution(
+            swappedBoard = initialSnapshot,
+            steps = steps,
+            finalResolution = resolution
+        )
+    }
+
+    private fun resolveCascadeSteps(
+        mutable: MutableList<MutableList<BoardTile>>,
+        steps: MutableList<CascadeStep>,
+        allMatchedPositions: MutableSet<GridPos>,
+        totalCounts: MutableMap<WasteType, Int>,
+        startCombo: Int,
+        random: Random,
+        maxCombo: Int = 10
+    ): Triple<Int, Int, Int> {
+        var comboCount = startCombo
+        var extraCleared = 0
+        var spawnedSpecials = 0
+
+        while (true) {
+            val groups = findMatchGroups(mutable)
+            if (groups.isEmpty()) break
+            comboCount++
+
+            val toClear = mutableSetOf<GridPos>()
+            val spawns = mutableMapOf<GridPos, BoardTile>()
+            var waveSpecials = 0
+
+            for (group in groups) {
+                toClear.addAll(group.positions)
+                if (group.positions.size >= 5) {
+                    val anchor = group.positions[group.positions.size / 2]
+                    spawns[anchor] = BoardTile(nextId(), group.type, SpecialTileType.ECO_BOMB)
+                    spawnedSpecials++
+                    waveSpecials++
+                } else if (group.positions.size == 4) {
+                    val anchor = group.positions[1]
+                    val spec = if (group.horizontal) SpecialTileType.LINE_H else SpecialTileType.LINE_V
+                    spawns[anchor] = BoardTile(nextId(), group.type, spec)
+                    spawnedSpecials++
+                    waveSpecials++
+                }
+            }
+
+            // Expand any special tiles caught in the match
+            val extraBurst = mutableSetOf<GridPos>()
+            for (pos in toClear) {
+                val tile = mutable[pos.row][pos.col]
+                if (tile.special != SpecialTileType.NONE) {
+                    extraBurst.addAll(expandSpecial(mutable, pos, tile.special))
+                }
+            }
+            toClear.addAll(extraBurst)
+
+            val stepCounts = mutableMapOf<WasteType, Int>()
+            val clearedPairs = ArrayList<Pair<GridPos, WasteType>>(toClear.size)
+            allMatchedPositions.addAll(toClear)
+            for (pos in toClear) {
+                val tile = mutable[pos.row][pos.col]
+                totalCounts[tile.type] = (totalCounts[tile.type] ?: 0) + 1
+                stepCounts[tile.type] = (stepCounts[tile.type] ?: 0) + 1
+                clearedPairs.add(pos to tile.type)
+            }
+            extraCleared += toClear.size
+            refillCleared(mutable, toClear, spawns, random)
+            steps.add(
+                CascadeStep(
+                    matchedPositions = toClear.toSet(),
+                    clearedTiles = clearedPairs,
+                    boardAfterGravity = mutable.map { it.toList() },
+                    comboIndex = comboCount,
+                    countsByType = stepCounts,
+                    spawnedSpecialCount = waveSpecials
+                )
+            )
+            if (comboCount >= maxCombo) break
+        }
+        return Triple(comboCount, extraCleared, spawnedSpecials)
     }
 
     fun findAnyValidMove(board: List<List<BoardTile>>): Pair<GridPos, GridPos>? {
@@ -324,8 +425,47 @@ object Match3Engine {
     fun hasValidMove(board: List<List<BoardTile>>): Boolean = findAnyValidMove(board) != null
 
     fun ensurePlayableBoard(board: List<List<BoardTile>>, random: Random = Random.Default): List<List<BoardTile>> {
-        if (hasValidMove(board)) return board
+        val settled = breakResidualMatches(board, random)
+        if (hasValidMove(settled)) return settled
         return createInitialBoard(random)
+    }
+
+    /**
+     * A cascade can stop at its combo cap with runs still on the board. Re-roll the tiles of any
+     * remaining run (without scoring) so the player never sees an already-matched line.
+     */
+    fun breakResidualMatches(board: List<List<BoardTile>>, random: Random = Random.Default): List<List<BoardTile>> {
+        if (findMatchGroups(board).isEmpty()) return board
+        val grid = board.map { it.toMutableList() }.toMutableList()
+        val types = WasteType.entries
+        var guard = 0
+        while (guard++ < 20) {
+            val groups = findMatchGroups(grid)
+            if (groups.isEmpty()) break
+            for (group in groups) {
+                // Changing the middle tile of a run breaks it.
+                val pos = group.positions[group.positions.size / 2]
+                val candidates = types.filter { t -> t != group.type && !wouldMatchAt(grid, pos, t) }
+                    .ifEmpty { types.filter { it != group.type } }
+                grid[pos.row][pos.col] = BoardTile(nextId(), candidates[random.nextInt(candidates.size)])
+            }
+        }
+        return grid.map { it.toList() }
+    }
+
+    private fun wouldMatchAt(grid: List<List<BoardTile>>, pos: GridPos, type: WasteType): Boolean {
+        fun same(r: Int, c: Int) = r in 0 until BOARD_SIZE && c in 0 until BOARD_SIZE && grid[r][c].type == type
+        var h = 1
+        var c = pos.col - 1
+        while (same(pos.row, c)) { h++; c-- }
+        c = pos.col + 1
+        while (same(pos.row, c)) { h++; c++ }
+        var v = 1
+        var r = pos.row - 1
+        while (same(r, pos.col)) { v++; r-- }
+        r = pos.row + 1
+        while (same(r, pos.col)) { v++; r++ }
+        return h >= 3 || v >= 3
     }
 
     private fun swapInPlace(grid: MutableList<MutableList<BoardTile>>, r1: Int, c1: Int, r2: Int, c2: Int) {

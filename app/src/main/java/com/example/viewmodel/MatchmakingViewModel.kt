@@ -83,7 +83,23 @@ class MatchmakingViewModel(
         )
 
         matchmakingJob = viewModelScope.launch {
+            // Offline guest mode (no sign-in): short "search" then a trophy-scaled AI rival.
+            if (repository.isGuestMode()) {
+                for (sec in 1..2) {
+                    delay(1000L)
+                    _matchmakingState.value = _matchmakingState.value.copy(searchElapsedSec = sec, trophyRangeLabel = "Offline • AI rival")
+                }
+                launchTrophyScaledRivalMatch(profile, arena)
+                return@launch
+            }
+
             val enqueueRes = repository.enqueueForMatchmaking(profile, arena.id)
+            if (enqueueRes.isFailure) {
+                // Could not reach the queue: don't make the player wait for nobody.
+                delay(1000L)
+                launchTrophyScaledRivalMatch(profile, arena)
+                return@launch
+            }
             val foundTicket = enqueueRes.getOrNull()
 
             if (foundTicket != null) {
@@ -108,15 +124,15 @@ class MatchmakingViewModel(
                     }
             }
 
-            // Wait up to 8 seconds for a live online Trophy-matched challenger
+            // Wait up to 5 seconds for a live online Trophy-matched challenger (then an AI rival)
             var waited = 0
-            while (waited < 8 && !pairedExternally) {
+            while (waited < 5 && !pairedExternally) {
                 delay(1000L)
                 waited++
                 val rangeLabel = when {
                     waited <= 2 -> "±150 Trophies"
-                    waited <= 5 -> "±250 Trophies"
-                    else -> "±350 Trophies (Arena Pool)"
+                    waited <= 4 -> "±250 Trophies"
+                    else -> "±300 Trophies (Arena Pool)"
                 }
                 _matchmakingState.value = _matchmakingState.value.copy(
                     searchElapsedSec = waited,
@@ -190,9 +206,13 @@ class MatchmakingViewModel(
             player2 = p2
         )
 
-        val matchId = repository.createLiveMatch(liveMatch).getOrNull() ?: "local_${System.currentTimeMillis()}"
-        repository.claimOpponentTicket(opponent.userId, matchId)
-        repository.leaveMatchmakingQueue()
+        // Create the match and claim the ticket atomically. If the opponent already left or was
+        // taken by someone else, play an AI rival instead of a frozen "ghost" opponent.
+        val matchId = repository.createMatchAndClaimTicket(liveMatch, opponent.userId).getOrNull()
+        if (matchId == null) {
+            launchTrophyScaledRivalMatch(profile, arena)
+            return
+        }
 
         spinPlaceRouletteAndLaunchSession(
             GameSessionConfig(
@@ -371,23 +391,11 @@ class MatchmakingViewModel(
         }
     }
 
-    fun onTileTapped(pos: GridPos) {
-        gameStateManager.onTileTapped(pos) {
-            _matchmakingState.value = _matchmakingState.value.copy(phase = MatchmakingPhase.FINISHED)
-        }
-    }
+    fun onTileTapped(pos: GridPos) = gameStateManager.onTileTapped(pos)
 
-    fun onTileSwiped(from: GridPos, to: GridPos) {
-        gameStateManager.onTileSwiped(from, to) {
-            _matchmakingState.value = _matchmakingState.value.copy(phase = MatchmakingPhase.FINISHED)
-        }
-    }
+    fun onTileSwiped(from: GridPos, to: GridPos) = gameStateManager.onTileSwiped(from, to)
 
-    fun activateEcoDeckBoss(slotIndex: Int) {
-        gameStateManager.activateEcoDeckSlot(slotIndex) {
-            _matchmakingState.value = _matchmakingState.value.copy(phase = MatchmakingPhase.FINISHED)
-        }
-    }
+    fun activateEcoDeckBoss(slotIndex: Int) = gameStateManager.activateEcoDeckSlot(slotIndex)
 
     fun toggleSound() = gameStateManager.toggleSound()
 
