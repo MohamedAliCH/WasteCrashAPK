@@ -83,7 +83,7 @@ fun BattleScreen(
     }
 
     LaunchedEffect(state.invalidSwapToken) {
-        if (state.invalidSwapToken > 0L) {
+        if (state.invalidSwapToken > 0L && com.example.data.SettingsStore.current.hapticsEnabled) {
             haptic.performHapticFeedback(HapticFeedbackType.LongPress)
         }
     }

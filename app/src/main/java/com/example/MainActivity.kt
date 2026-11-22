@@ -23,6 +23,8 @@ import androidx.credentials.CredentialManager
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.data.AuthManager
+import com.example.data.SettingsStore
+import com.example.model.AvatarCatalog
 import com.example.data.WasteCrushRepository
 import com.example.model.GameCatalog
 import com.example.model.UiState
@@ -38,6 +40,7 @@ import kotlinx.coroutines.tasks.await
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        SettingsStore.init(this)
         enableEdgeToEdge(
             statusBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),
             navigationBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT)
@@ -68,8 +71,6 @@ private sealed interface FullScreenOverlay {
     data object BattleFlow : FullScreenOverlay
     data class TunisiaMap(val initialPlaceId: String? = null) : FullScreenOverlay
     data object Quests : FullScreenOverlay
-    data object SpectatorHub : FullScreenOverlay
-    data class SpectatorLive(val matchId: String) : FullScreenOverlay
     data class SpectatorReplay(val replayId: String) : FullScreenOverlay
 }
 
@@ -143,7 +144,8 @@ private fun AuthenticatedWasteCrushApp(currentUserId: String) {
 
     val profileState by mainVm.profileState.collectAsStateWithLifecycle()
     val publicProfilesState by mainVm.publicProfilesState.collectAsStateWithLifecycle()
-    val activeMatchesState by mainVm.activeMatchesState.collectAsStateWithLifecycle()
+    val settings by SettingsStore.settings.collectAsStateWithLifecycle()
+    var profilePanelTab by remember { mutableStateOf<ProfileTab?>(null) }
     val replaysState by mainVm.replaysState.collectAsStateWithLifecycle()
     val clansState by mainVm.clansState.collectAsStateWithLifecycle()
     val joinedClanId by mainVm.joinedClanId.collectAsStateWithLifecycle()
@@ -254,40 +256,7 @@ private fun AuthenticatedWasteCrushApp(currentUserId: String) {
             return
         }
 
-        is FullScreenOverlay.SpectatorHub -> {
-            val currentProfile = (profileState as? UiState.Success)?.data
-            if (currentProfile == null) {
-                overlay = FullScreenOverlay.None
-                return
-            }
-            androidx.activity.compose.BackHandler { overlay = FullScreenOverlay.None }
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(DarkBgPrimary)
-                    .windowInsetsPadding(WindowInsets.safeDrawing)
-            ) {
-                SpectatorHubScreen(
-                    profile = currentProfile,
-                    activeMatchesState = activeMatchesState,
-                    replaysState = replaysState,
-                    publicProfilesState = publicProfilesState,
-                    onWatchLiveMatch = { matchId ->
-                        spectatorVm.openLiveMatch(matchId)
-                        overlay = FullScreenOverlay.SpectatorLive(matchId)
-                    },
-                    onWatchReplay = { replayId ->
-                        spectatorVm.openReplay(replayId)
-                        overlay = FullScreenOverlay.SpectatorReplay(replayId)
-                    },
-                    onAddFriend = { code -> mainVm.addFriend(currentProfile, code) },
-                    onRemoveFriend = { fUid, fName -> mainVm.removeFriend(currentProfile, fUid, fName) }
-                )
-            }
-            return
-        }
-
-        is FullScreenOverlay.SpectatorLive, is FullScreenOverlay.SpectatorReplay -> {
+        is FullScreenOverlay.SpectatorReplay -> {
             SpectatorTheatreScreen(
                 state = spectatorState,
                 onSetPerspective = spectatorVm::setPerspective,
@@ -450,18 +419,9 @@ private fun AuthenticatedWasteCrushApp(currentUserId: String) {
                                         onOpenQuests = {
                                             overlay = FullScreenOverlay.Quests
                                         },
-                                        onOpenSpectatorHub = {
-                                            overlay = FullScreenOverlay.SpectatorHub
-                                        },
-                                        onSignOut = {
-                                            val user = Firebase.auth.currentUser
-                                            if (repository.isGuestMode() || user == null || user.isAnonymous) {
-                                                // Signing out an anonymous account would create a new one and lose all progress.
-                                                mainVm.showBanner("Guest profile: progress is saved on this device. Nothing to sign out.")
-                                            } else {
-                                                AuthManager.signOut(credentialManager, scope)
-                                            }
-                                        }
+                                        onOpenProfile = { profilePanelTab = ProfileTab.AVATAR },
+                                        onOpenSettings = { profilePanelTab = ProfileTab.SETTINGS },
+                                        hasNewAvatars = AvatarCatalog.unlockedFor(profile).any { it.id !in settings.seenAvatarIds }
                                     )
 
                                     HubTab.DECK -> BossCollectionScreen(
@@ -505,6 +465,39 @@ private fun AuthenticatedWasteCrushApp(currentUserId: String) {
                 }
             }
         }
+
+        // Profile side panel: avatar customisation & unlocks, settings, own replays
+        ProfilePanel(
+            visible = profilePanelTab != null,
+            profile = currentProfile,
+            initialTab = profilePanelTab ?: ProfileTab.AVATAR,
+            settings = settings,
+            replaysState = replaysState,
+            isGuest = mainVm.isGuest,
+            onClose = { profilePanelTab = null },
+            onSelectAvatar = mainVm::selectAvatar,
+            onRename = mainVm::rename,
+            onSoundChange = SettingsStore::setSound,
+            onHapticsChange = SettingsStore::setHaptics,
+            onHintsChange = SettingsStore::setHints,
+            onResetProgress = mainVm::resetGuestProgress,
+            onSignOut = {
+                val user = Firebase.auth.currentUser
+                if (repository.isGuestMode() || user == null || user.isAnonymous) {
+                    // Signing out an anonymous account would create a new one and lose all progress.
+                    mainVm.showBanner("Guest profile: progress is saved on this device. Nothing to sign out.")
+                } else {
+                    profilePanelTab = null
+                    AuthManager.signOut(credentialManager, scope)
+                }
+            },
+            onWatchReplay = { replayId ->
+                profilePanelTab = null
+                spectatorVm.openReplay(replayId)
+                overlay = FullScreenOverlay.SpectatorReplay(replayId)
+            },
+            onAvatarsSeen = SettingsStore::markAvatarsSeen
+        )
     }
 }
 

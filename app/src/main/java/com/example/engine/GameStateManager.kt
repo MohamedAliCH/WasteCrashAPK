@@ -1,6 +1,7 @@
 package com.example.engine
 
 import com.example.data.MatchRewardOutcome
+import com.example.data.SettingsStore
 import com.example.data.WasteCrushRepository
 import com.example.model.*
 import com.google.firebase.firestore.FirebaseFirestoreException
@@ -331,6 +332,7 @@ class GameStateManager(
     fun toggleSound() {
         val next = !_state.value.soundEnabled
         soundPlayer.soundEnabled = next
+        SettingsStore.setSound(next)
         _state.value = _state.value.copy(soundEnabled = next)
     }
 
@@ -343,6 +345,7 @@ class GameStateManager(
         onSessionFinished: (won: Boolean) -> Unit
     ) {
         stopSession()
+        soundPlayer.soundEnabled = SettingsStore.current.soundEnabled
         activeProfile = config.profile
         onFinished = onSessionFinished
         tilesMatchedByType.clear()
@@ -428,7 +431,7 @@ class GameStateManager(
                 val nextSec = (s.secondsRemaining - 1).coerceAtLeast(0)
                 val nowMs = System.currentTimeMillis()
                 val prunedBeams = s.activeBeams.filter { nowMs - it.createdAtMs < 700L }
-                val nextHint = if (s.hintPair == null && !s.isBoardAnimating && nowMs - lastPlayerMoveMs >= 4500L) {
+                val nextHint = if (SettingsStore.current.hintsEnabled && s.hintPair == null && !s.isBoardAnimating && nowMs - lastPlayerMoveMs >= 4500L) {
                     Match3Engine.findAnyValidMove(s.localPlayer.board)
                 } else {
                     s.hintPair

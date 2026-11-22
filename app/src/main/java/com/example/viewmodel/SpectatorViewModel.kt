@@ -26,7 +26,7 @@ enum class SpectatorPerspective {
 
 data class SpectatorTheatreState(
     val isLoading: Boolean = true,
-    val isLiveMode: Boolean = true,
+    val isLiveMode: Boolean = false,
     val errorMessage: String? = null,
     val arenaId: Int = 0,
     val placeId: String = "place_hammamet",
@@ -84,78 +84,7 @@ class SpectatorViewModel(
 
     private var liveJob: Job? = null
     private var replayJob: Job? = null
-    private var activeLiveMatchId: String? = null
     private var loadedReplay: MatchReplay? = null
-
-    fun openLiveMatch(matchId: String) {
-        stopWatching()
-        activeLiveMatchId = matchId
-        _state.value = SpectatorTheatreState(isLoading = true, isLiveMode = true)
-
-        viewModelScope.launch {
-            repository.adjustSpectatorCount(matchId, +1L)
-        }
-
-        liveJob = viewModelScope.launch {
-            repository.observeLiveMatch(matchId)
-                .catch { error ->
-                    val fsErr = generateSequence(error) { it.cause }.filterIsInstance<FirebaseFirestoreException>().firstOrNull()
-                    if (fsErr == null && error is CancellationException) throw error
-                    _state.value = _state.value.copy(
-                        isLoading = false,
-                        errorMessage = (fsErr ?: error).message ?: "Unable to connect to live stream."
-                    )
-                }
-                .collect { match ->
-                    if (match == null) {
-                        _state.value = _state.value.copy(isLoading = false, errorMessage = "Live match has ended or no longer exists.")
-                    } else {
-                        bindLiveMatch(match)
-                    }
-                }
-        }
-    }
-
-    private fun bindLiveMatch(match: LiveMatch) {
-        val current = _state.value
-        _state.value = current.copy(
-            isLoading = false,
-            isLiveMode = true,
-            errorMessage = null,
-            arenaId = match.arenaId,
-            placeId = match.placeId,
-            bossId = match.bossId,
-            statusText = if (match.status == "FINISHED") "MATCH ENDED" else "LIVE NOW",
-            spectatorCount = match.spectatorCount.coerceAtLeast(1),
-            p1Uid = match.player1.uid,
-            p1Name = match.player1.name,
-            p1Trophies = match.player1.trophies,
-            p1DeckIds = match.player1.deckBossIds,
-            p1DeckLevels = match.player1.deckBossLevels,
-            p1Board = Match3Engine.decodeBoardFlat(match.player1.boardFlat),
-            p1BossHp = match.player1.bossHp,
-            p1BossMaxHp = match.player1.bossMaxHp,
-            p1Wave = match.player1.waveIndex,
-            p1Damage = match.player1.totalDamage,
-            p1RestorationPct = match.player1.restorationPct,
-            p1Charges = match.player1.skillCharges,
-            p1LastAbility = match.player1.lastAbility,
-            p2Uid = match.player2.uid,
-            p2Name = match.player2.name,
-            p2Trophies = match.player2.trophies,
-            p2DeckIds = match.player2.deckBossIds,
-            p2DeckLevels = match.player2.deckBossLevels,
-            p2Board = Match3Engine.decodeBoardFlat(match.player2.boardFlat),
-            p2BossHp = match.player2.bossHp,
-            p2BossMaxHp = match.player2.bossMaxHp,
-            p2Wave = match.player2.waveIndex,
-            p2Damage = match.player2.totalDamage,
-            p2RestorationPct = match.player2.restorationPct,
-            p2Charges = match.player2.skillCharges,
-            p2LastAbility = match.player2.lastAbility,
-            winnerUid = match.winnerUid
-        )
-    }
 
     fun openReplay(replayId: String) {
         stopWatching()
@@ -289,9 +218,6 @@ class SpectatorViewModel(
     fun stopWatching() {
         liveJob?.cancel()
         replayJob?.cancel()
-        // Fire-and-forget: must also work from onCleared(), when viewModelScope is already cancelled.
-        activeLiveMatchId?.let { id -> repository.adjustSpectatorCountDetached(id, -1L) }
-        activeLiveMatchId = null
         loadedReplay = null
     }
 

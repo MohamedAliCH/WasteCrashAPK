@@ -25,10 +25,13 @@ data class UserProfile(
     val dailyQuestSeedDate: String = "2026-11-21",
     val questProgress: Map<String, Int> = emptyMap(),
     val questClaimed: Map<String, Boolean> = emptyMap(),
+    /** Chosen avatar (see AvatarCatalog); unlocks are derived from wins, trophies and captured bosses. */
+    val avatarId: String = "av_sachet",
     @ServerTimestamp val createdAt: Timestamp? = null,
     @ServerTimestamp val updatedAt: Timestamp? = null
 ) {
     fun toCreateMap(): Map<String, Any> = mapOf(
+        "avatarId" to avatarId.take(40).ifBlank { "av_sachet" },
         "userId" to userId,
         "displayName" to displayName.take(40).ifBlank { "Eco Challenger" },
         "friendCode" to friendCode,

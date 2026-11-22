@@ -28,13 +28,15 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.model.GameCatalog
 import com.example.model.TunisianPlace
+import com.example.model.TunisiaGeo
 import com.example.ui.theme.*
 import kotlin.math.hypot
 import kotlin.math.min
 
 /**
  * Interactive geographic Map of Tunisia rendered on a luxury dark Mediterranean chart.
- * Coordinates (mapX, mapY) are normalized in [0f..1f] relative to the Tunisia silhouette bounding box.
+ * The country is drawn from its real outline (TunisiaGeo, Natural Earth); pins use the same
+ * projection, so (mapX, mapY) are TunisiaGeo.project(lon, lat) of each place.
  */
 @Composable
 fun TunisiaMapCanvas(
@@ -79,7 +81,7 @@ fun TunisiaMapCanvas(
                     if (!previewMode) {
                         Modifier.pointerInput(places, lastSize) {
                             detectTapGestures { offset ->
-                                val bounds = computeMapBounds(lastSize)
+                                val bounds = computeMapBounds(lastSize, previewMode)
                                 var bestPlace: TunisianPlace? = null
                                 var bestDist = Float.MAX_VALUE
                                 for (place in places) {
@@ -100,7 +102,7 @@ fun TunisiaMapCanvas(
             lastSize = size
             val w = size.width
             val h = size.height
-            val bounds = computeMapBounds(size)
+            val bounds = computeMapBounds(size, previewMode)
 
             // 1. Deep Mediterranean Ocean Marine Chart Backdrop
             drawRect(
@@ -124,8 +126,8 @@ fun TunisiaMapCanvas(
                 drawLine(gridColor, Offset(0f, y), Offset(w, y), strokeWidth = 1.dp.toPx())
             }
 
-            // 2. Stylized Geographic Silhouette of Tunisia (North Cap Blanc -> Cap Bon -> Sahel -> Gabes -> South Sahara)
-            val tunisiaPath = buildTunisiaSilhouettePath(bounds)
+            // 2. Real outline of Tunisia (mainland + Djerba + Kerkennah)
+            val tunisiaPath = buildTunisiaPath(bounds)
 
             // Coastal turquoise Mediterranean outer glow around Tunisia
             drawPath(
@@ -150,28 +152,14 @@ fun TunisiaMapCanvas(
                 )
             )
 
-            // Subtle Chott El Djerid salt lake shimmer
+            // Chott el-Djerid salt lake shimmer, at its real position
+            val (chottX, chottY) = TunisiaGeo.project(8.45f, 33.78f)
             drawOval(
                 brush = Brush.horizontalGradient(
                     listOf(Color(0xFF5EEAD4).copy(alpha = 0.25f), Color(0xFFE0F2FE).copy(alpha = 0.35f))
                 ),
-                topLeft = Offset(bounds.left + bounds.width * 0.25f, bounds.top + bounds.height * 0.61f),
-                size = Size(bounds.width * 0.22f, bounds.height * 0.055f)
-            )
-
-            // Djerba Island off the Gulf of Gabes
-            val djerbaRectTopLeft = Offset(bounds.left + bounds.width * 0.65f, bounds.top + bounds.height * 0.59f)
-            val djerbaSize = Size(bounds.width * 0.095f, bounds.height * 0.055f)
-            drawOval(
-                color = Color(0xFF1D6B68),
-                topLeft = djerbaRectTopLeft,
-                size = djerbaSize
-            )
-            drawOval(
-                color = SaffronGold.copy(alpha = 0.85f),
-                topLeft = djerbaRectTopLeft,
-                size = djerbaSize,
-                style = Stroke(width = 1.6.dp.toPx())
+                topLeft = Offset(bounds.left + (chottX - 0.11f) * bounds.width, bounds.top + (chottY - 0.02f) * bounds.height),
+                size = Size(bounds.width * 0.22f, bounds.height * 0.04f)
             )
 
             // Metallic gold Tunisia border outline
@@ -183,7 +171,7 @@ fun TunisiaMapCanvas(
 
             // 3. Landmark Pins
             val currentArena = GameCatalog.arenaForTrophies(userTrophies)
-            val previewLabelIds = setOf("place_carthage", "place_hammamet", "place_djerba", "place_tozeur")
+            val previewLabelIds = setOf("place_hammamet", "place_djerba", "place_tozeur")
 
             // Draw unselected pins first, then selected pin on top
             val orderedPlaces = places.sortedBy { it.id == selectedPlaceId }
@@ -280,52 +268,31 @@ private data class MapBounds(
     val height: Float
 )
 
-private fun computeMapBounds(canvasSize: Size): MapBounds {
+private fun computeMapBounds(canvasSize: Size, previewMode: Boolean = false): MapBounds {
     val paddingH = canvasSize.width * 0.08f
-    val paddingV = canvasSize.height * 0.07f
+    // Home preview: keep the north coast clear of the wordmark drawn over the top of the card.
+    val paddingTop = canvasSize.height * if (previewMode) 0.21f else 0.07f
+    val paddingBottom = canvasSize.height * if (previewMode) 0.02f else 0.07f
     val availW = (canvasSize.width - paddingH * 2f).coerceAtLeast(1f)
-    val availH = (canvasSize.height - paddingV * 2f).coerceAtLeast(1f)
-    // Tunisia's geographic aspect ratio is roughly 0.62 width : 1.0 height
-    val aspect = 0.66f
+    val availH = (canvasSize.height - paddingTop - paddingBottom).coerceAtLeast(1f)
+    // Aspect of the projected map window (real proportions of the country)
+    val aspect = TunisiaGeo.ASPECT
     val boxH = min(availH, availW / aspect)
     val boxW = boxH * aspect
     val left = (canvasSize.width - boxW) * 0.5f
-    val top = (canvasSize.height - boxH) * 0.5f
+    val top = paddingTop + (availH - boxH) * 0.5f
     return MapBounds(left, top, boxW, boxH)
 }
 
-private fun buildTunisiaSilhouettePath(b: MapBounds): Path {
-    fun pt(nx: Float, ny: Float) = Offset(b.left + nx * b.width, b.top + ny * b.height)
-    val points = listOf(
-        pt(0.28f, 0.08f), // Tabarka / NW Coast
-        pt(0.45f, 0.04f), // Bizerte / Cap Blanc
-        pt(0.55f, 0.07f), // Ghar El Melh
-        pt(0.57f, 0.13f), // Gulf of Tunis / Sidi Bou Said
-        pt(0.70f, 0.09f), // Cap Bon tip
-        pt(0.75f, 0.15f), // Kelibia
-        pt(0.66f, 0.22f), // Hammamet
-        pt(0.64f, 0.29f), // Sousse
-        pt(0.70f, 0.34f), // Monastir
-        pt(0.72f, 0.41f), // Mahdia
-        pt(0.64f, 0.49f), // Sfax
-        pt(0.55f, 0.55f), // Gulf of Gabes
-        pt(0.62f, 0.61f), // Gabes / Djerba coast
-        pt(0.76f, 0.66f), // Zarzis
-        pt(0.74f, 0.74f), // Ben Gardane
-        pt(0.63f, 0.83f), // Tataouine east
-        pt(0.53f, 0.96f), // Borj El Khadra southern tip
-        pt(0.42f, 0.86f), // Remada / Sahara dunes
-        pt(0.37f, 0.75f), // Grand Erg
-        pt(0.20f, 0.67f), // Nefta / Chott border
-        pt(0.18f, 0.54f), // Chebika / Tozeur
-        pt(0.22f, 0.41f), // Kasserine
-        pt(0.21f, 0.27f), // El Kef
-        pt(0.25f, 0.15f)  // Ain Draham
-    )
-    return Path().apply {
-        moveTo(points.first().x, points.first().y)
-        for (i in 1 until points.size) {
-            lineTo(points[i].x, points[i].y)
+private fun buildTunisiaPath(b: MapBounds): Path = Path().apply {
+    for (ring in TunisiaGeo.RINGS) {
+        var i = 0
+        while (i + 1 < ring.size) {
+            val (nx, ny) = TunisiaGeo.project(ring[i], ring[i + 1])
+            val x = b.left + nx * b.width
+            val y = b.top + ny * b.height
+            if (i == 0) moveTo(x, y) else lineTo(x, y)
+            i += 2
         }
         close()
     }

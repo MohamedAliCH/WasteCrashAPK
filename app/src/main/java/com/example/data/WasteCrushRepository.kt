@@ -69,11 +69,97 @@ class WasteCrushRepository(
         private const val KEY_GUEST_PROFILE = "guest_profile_json"
         const val GUEST_UID = "guest_local"
         /** Replays recorded in offline guest mode (kept for this app session). */
-        private val localReplays = java.util.concurrent.ConcurrentHashMap<String, MatchReplay>()
+        private val localReplays = MutableStateFlow<List<MatchReplay>>(emptyList())
+        private var localReplaysLoaded = false
+        private const val LOCAL_REPLAYS_FILE = "guest_replays.json"
+        private const val MAX_LOCAL_REPLAYS = 20
     }
 
     init {
         initSocialPrefsIfNeeded()
+        loadLocalReplaysIfNeeded()
+    }
+
+    // --- Offline guest replays: kept in app storage (newest first, last 20) ---
+
+    private fun loadLocalReplaysIfNeeded() {
+        val ctx = appContext ?: return
+        if (localReplaysLoaded) return
+        localReplaysLoaded = true
+        try {
+            val file = java.io.File(ctx.filesDir, LOCAL_REPLAYS_FILE)
+            if (!file.exists()) return
+            val arr = JSONArray(file.readText())
+            localReplays.value = List(arr.length()) { decodeReplay(arr.getJSONObject(it)) }
+        } catch (_: Exception) {
+        }
+    }
+
+    private fun persistLocalReplays() {
+        val ctx = appContext ?: return
+        try {
+            val arr = JSONArray()
+            localReplays.value.forEach { arr.put(encodeReplay(it)) }
+            java.io.File(ctx.filesDir, LOCAL_REPLAYS_FILE).writeText(arr.toString())
+        } catch (_: Exception) {
+        }
+    }
+
+    private fun ints(list: List<Int>) = JSONArray(list)
+    private fun JSONArray?.toIntList(): List<Int> = if (this == null) emptyList() else List(length()) { optInt(it) }
+    private fun JSONArray?.toStrList(): List<String> = if (this == null) emptyList() else List(length()) { optString(it) }
+
+    private fun encodeSummary(s: ReplaySummary) = JSONObject().apply {
+        put("uid", s.uid); put("name", s.name); put("trophies", s.trophies)
+        put("deckBossIds", JSONArray(s.deckBossIds)); put("deckBossLevels", ints(s.deckBossLevels))
+        put("totalDamage", s.totalDamage); put("restorationPct", s.restorationPct)
+    }
+
+    private fun decodeSummary(o: JSONObject?) = if (o == null) ReplaySummary() else ReplaySummary(
+        uid = o.optString("uid"), name = o.optString("name"), trophies = o.optInt("trophies"),
+        deckBossIds = o.optJSONArray("deckBossIds").toStrList(), deckBossLevels = o.optJSONArray("deckBossLevels").toIntList(),
+        totalDamage = o.optInt("totalDamage"), restorationPct = o.optInt("restorationPct")
+    )
+
+    private fun encodeReplay(r: MatchReplay) = JSONObject().apply {
+        put("id", r.id); put("creatorUid", r.creatorUid); put("participantUids", JSONArray(r.participantUids))
+        put("arenaId", r.arenaId); put("placeId", r.placeId); put("bossId", r.bossId)
+        put("trophyBracket", r.trophyBracket); put("winnerUid", r.winnerUid); put("durationSec", r.durationSec)
+        put("player1Summary", encodeSummary(r.player1Summary)); put("player2Summary", encodeSummary(r.player2Summary))
+        put("frames", JSONArray().apply {
+            r.frames.forEach { f ->
+                put(JSONObject().apply {
+                    put("elapsedSec", f.elapsedSec); put("p1Board", ints(f.p1Board)); put("p2Board", ints(f.p2Board))
+                    put("p1BossHp", f.p1BossHp); put("p2BossHp", f.p2BossHp); put("p1Wave", f.p1Wave); put("p2Wave", f.p2Wave)
+                    put("p1Damage", f.p1Damage); put("p2Damage", f.p2Damage)
+                    put("p1Restoration", f.p1Restoration); put("p2Restoration", f.p2Restoration)
+                    put("p1Charges", ints(f.p1Charges)); put("p2Charges", ints(f.p2Charges)); put("eventText", f.eventText)
+                })
+            }
+        })
+    }
+
+    private fun decodeReplay(o: JSONObject): MatchReplay {
+        val fr = o.optJSONArray("frames") ?: JSONArray()
+        return MatchReplay(
+            id = o.optString("id"), creatorUid = o.optString("creatorUid"),
+            participantUids = o.optJSONArray("participantUids").toStrList(),
+            arenaId = o.optInt("arenaId"), placeId = o.optString("placeId"), bossId = o.optString("bossId"),
+            trophyBracket = o.optInt("trophyBracket"), winnerUid = o.optString("winnerUid"), durationSec = o.optInt("durationSec", 90),
+            player1Summary = decodeSummary(o.optJSONObject("player1Summary")),
+            player2Summary = decodeSummary(o.optJSONObject("player2Summary")),
+            frames = List(fr.length()) { i ->
+                val f = fr.getJSONObject(i)
+                ReplayFrame(
+                    elapsedSec = f.optInt("elapsedSec"), p1Board = f.optJSONArray("p1Board").toIntList(), p2Board = f.optJSONArray("p2Board").toIntList(),
+                    p1BossHp = f.optInt("p1BossHp"), p2BossHp = f.optInt("p2BossHp"), p1Wave = f.optInt("p1Wave", 1), p2Wave = f.optInt("p2Wave", 1),
+                    p1Damage = f.optInt("p1Damage"), p2Damage = f.optInt("p2Damage"),
+                    p1Restoration = f.optInt("p1Restoration"), p2Restoration = f.optInt("p2Restoration"),
+                    p1Charges = f.optJSONArray("p1Charges").toIntList(), p2Charges = f.optJSONArray("p2Charges").toIntList(),
+                    eventText = f.optString("eventText")
+                )
+            }
+        )
     }
 
     private fun socialPrefs() =
@@ -361,6 +447,8 @@ class WasteCrushRepository(
 
     /** Wipes local guest progress (debug/testing helper). */
     fun resetGuestProfile() {
+        localReplays.value = emptyList()
+        persistLocalReplays()
         guestPrefs()?.edit()?.remove(KEY_GUEST_PROFILE)?.apply()
         guestProfileState.value = null
         ensureGuestProfile()
@@ -381,6 +469,7 @@ class WasteCrushRepository(
         put("dailyQuestSeedDate", p.dailyQuestSeedDate)
         put("questProgress", JSONObject(p.questProgress as Map<*, *>))
         put("questClaimed", JSONObject(p.questClaimed as Map<*, *>))
+        put("avatarId", p.avatarId)
     }.toString()
 
     private fun decodeGuestProfile(json: String): UserProfile? = try {
@@ -412,7 +501,8 @@ class WasteCrushRepository(
             friendUids = strList("friendUids"),
             dailyQuestSeedDate = o.optString("dailyQuestSeedDate", todayDateKey()),
             questProgress = intMap("questProgress"),
-            questClaimed = boolMap("questClaimed")
+            questClaimed = boolMap("questClaimed"),
+            avatarId = o.optString("avatarId", AvatarCatalog.DEFAULT_ID)
         )
     } catch (_: Exception) {
         null
@@ -579,6 +669,8 @@ class WasteCrushRepository(
                         "questClaimed" -> updated.questClaimed
                         "equippedDeckIds" -> updated.equippedDeckIds
                         "friendUids" -> updated.friendUids
+                        "avatarId" -> updated.avatarId
+                        "displayName" -> updated.displayName
                         else -> throw IllegalArgumentException("Unknown field $f")
                     }
                 }
@@ -595,6 +687,24 @@ class WasteCrushRepository(
             Result.failure(e.cause?.takeIf { it is IllegalArgumentException || it is IllegalStateException } ?: e)
         }
     }
+
+    suspend fun updateAvatar(avatarId: String): Result<Unit> =
+        mutateProfile(OperationType.UPDATE) { p ->
+            val avatar = AvatarCatalog.all.firstOrNull { it.id == avatarId }
+                ?: throw IllegalArgumentException("Unknown avatar.")
+            require(avatar.isUnlocked(p)) { "Locked: ${avatar.requirementText()}." }
+            Triple(p.copy(avatarId = avatarId), listOf("avatarId"), Unit)
+        }
+
+    suspend fun updateDisplayName(rawName: String): Result<String> =
+        mutateProfile(OperationType.UPDATE) { p ->
+            val name = rawName.trim().replace(Regex("\\s+"), " ")
+            require(name.length in 3..20) { "Name must be 3 to 20 characters." }
+            require(name.all { it.isLetterOrDigit() || it == ' ' || it == '_' || it == '-' }) {
+                "Use letters, digits, spaces, _ or -."
+            }
+            Triple(p.copy(displayName = name), listOf("displayName"), name)
+        }
 
     suspend fun updateEquippedDeck(newDeckIds: List<String>): Result<Unit> =
         mutateProfile(OperationType.UPDATE) { p ->
@@ -914,66 +1024,12 @@ class WasteCrushRepository(
         }
     }
 
-    suspend fun adjustSpectatorCount(matchId: String, delta: Long): Result<Unit> {
-        if (isGuestMode() || matchId.startsWith("local_")) return Result.success(Unit)
-        val path = "liveMatches/$matchId"
-        return try {
-            requireUserId()
-            db.collection("liveMatches").document(matchId)
-                .update(mapOf("spectatorCount" to FieldValue.increment(delta)))
-                .await()
-            Result.success(Unit)
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            handleFirestoreError(e, OperationType.UPDATE, path)
-            Result.failure(e)
-        }
-    }
-
-    /** Fire-and-forget variant usable when the caller's scope is being cancelled (e.g. onCleared). */
-    fun adjustSpectatorCountDetached(matchId: String, delta: Long) {
-        if (isGuestMode() || matchId.startsWith("local_")) return
-        try {
-            db.collection("liveMatches").document(matchId)
-                .update(mapOf("spectatorCount" to FieldValue.increment(delta)))
-                .addOnFailureListener { handleFirestoreError(it, OperationType.UPDATE, "liveMatches/$matchId") }
-        } catch (_: Exception) {
-        }
-    }
-
-    fun observeActiveLiveMatches(): Flow<List<LiveMatch>> = flow {
-        if (isGuestMode()) {
-            emit(emptyList())
-            return@flow
-        }
-        val uid = requireUserId()
-        val path = "liveMatches"
-        emitAll(
-            db.collection("liveMatches")
-                .whereEqualTo("status", "ACTIVE")
-                .limit(30)
-                .snapshots()
-                .map { snap ->
-                    snap.toObjects(LiveMatch::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
-                        .sortedByDescending { it.updatedAt?.seconds ?: 0L }
-                }
-                .catch { error ->
-                    val fsErr = generateSequence(error) { it.cause }.filterIsInstance<FirebaseFirestoreException>().firstOrNull()
-                    if (fsErr == null && error is CancellationException) throw error
-                    if (auth.currentUser?.uid == uid) {
-                        handleFirestoreError(fsErr ?: error, OperationType.LIST, path)
-                    }
-                    throw error
-                }
-        )
-    }
-
     // --- Replays ---
     suspend fun saveReplay(replay: MatchReplay): Result<String> {
         if (isGuestMode()) {
             val id = "local_replay_${System.currentTimeMillis()}"
-            localReplays[id] = replay.copy(id = id, creatorUid = GUEST_UID)
+            localReplays.value = (listOf(replay.copy(id = id, creatorUid = GUEST_UID)) + localReplays.value).take(MAX_LOCAL_REPLAYS)
+            persistLocalReplays()
             return Result.success(id)
         }
         val uid = auth.currentUser?.uid ?: return Result.failure(IllegalStateException("Not signed in"))
@@ -994,7 +1050,7 @@ class WasteCrushRepository(
 
     fun observePublicReplays(): Flow<List<MatchReplay>> = flow {
         if (isGuestMode()) {
-            emit(localReplays.values.sortedByDescending { it.id })
+            emitAll(localReplays)
             return@flow
         }
         val uid = requireUserId()
@@ -1020,7 +1076,7 @@ class WasteCrushRepository(
     }
 
     suspend fun getReplayById(replayId: String): Result<MatchReplay?> {
-        localReplays[replayId]?.let { return Result.success(it) }
+        localReplays.value.firstOrNull { it.id == replayId }?.let { return Result.success(it) }
         if (isGuestMode()) return Result.success(null)
         val path = "replays/$replayId"
         return try {

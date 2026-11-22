@@ -52,15 +52,6 @@ class MainViewModel(
         }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), UiState.Loading)
 
-    val activeMatchesState: StateFlow<UiState<List<LiveMatch>>> = repository.observeActiveLiveMatches()
-        .map<List<LiveMatch>, UiState<List<LiveMatch>>> { UiState.Success(it) }
-        .catch { error ->
-            val fsErr = generateSequence(error) { it.cause }.filterIsInstance<FirebaseFirestoreException>().firstOrNull()
-            if (fsErr == null && error is CancellationException) throw error
-            emit(UiState.Error((fsErr ?: error).message ?: "Failed to load live matches"))
-        }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), UiState.Loading)
-
     val replaysState: StateFlow<UiState<List<MatchReplay>>> = repository.observePublicReplays()
         .map<List<MatchReplay>, UiState<List<MatchReplay>>> { UiState.Success(it) }
         .catch { error ->
@@ -97,6 +88,30 @@ class MainViewModel(
 
     fun sendClanMessage(text: String, profile: UserProfile) {
         repository.sendClanMessage(text, profile)
+    }
+
+    val isGuest: Boolean get() = repository.isGuestMode()
+
+    fun selectAvatar(avatarId: String) {
+        viewModelScope.launch {
+            repository.updateAvatar(avatarId)
+                .onSuccess { _statusBanner.value = "Avatar updated: ${AvatarCatalog.byId(avatarId).name}" }
+                .onFailure { _statusBanner.value = it.localizedMessage ?: "Avatar is locked." }
+        }
+    }
+
+    fun rename(name: String) {
+        viewModelScope.launch {
+            repository.updateDisplayName(name)
+                .onSuccess { _statusBanner.value = "Name changed to $it" }
+                .onFailure { _statusBanner.value = it.localizedMessage ?: "Could not change name." }
+        }
+    }
+
+    fun resetGuestProgress() {
+        if (!repository.isGuestMode()) return
+        repository.resetGuestProfile()
+        _statusBanner.value = "Guest progress reset."
     }
 
     fun showBanner(message: String) {

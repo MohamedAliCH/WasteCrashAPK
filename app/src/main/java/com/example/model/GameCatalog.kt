@@ -46,6 +46,7 @@ data class TunisianPlace(
     val arenaId: Int,
     val regionTag: String,
     val ecoFact: String,
+    /** Position on the map, normalised with TunisiaGeo.project(lon, lat). */
     val mapX: Float = 0.5f,
     val mapY: Float = 0.5f,
     val guardianBossId: String = "boss_b1",
@@ -151,11 +152,11 @@ object GameCatalog {
             primaryColor = SidiCobalt,
             secondaryColor = Color(0xFF00B4D8),
             places = listOf(
-                TunisianPlace("place_hammamet", "Hammamet", 0, "Hammamet-Sud Beach", "Thousands of visitors come every summer: sorting waste keeps the sand clean.", 0.64f, 0.21f, "boss_b1", "Mediterranean Jasmine Coast", R.drawable.scene_hammamet_clean, R.drawable.scene_hammamet_toon, R.drawable.scene_hammamet_dirty, "الحمامات"),
-                TunisianPlace("place_djerba", "Djerba", 0, "Sidi Mahrez Beach", "Djerba is an island: litter left on the beach quickly reaches the sea and the sea turtles.", 0.71f, 0.62f, "boss_b2", "Island of Dreams", R.drawable.scene_djerba_clean, arabicName = "جربة"),
-                TunisianPlace("place_mahdia", "Mahdia", 0, "Cap Africa", "Mahdia lives from fishing: a lost net keeps trapping fish for years.", 0.69f, 0.39f, "boss_b3", "Turquoise Reef Peninsula", R.drawable.scene_mahdia_clean, arabicName = "المهدية"),
-                TunisianPlace("place_tabarka", "Tabarka", 0, "The Needles of Tabarka", "Red coral grows off Tabarka: a plastic bottle takes centuries to disappear.", 0.36f, 0.12f, "boss_b4", "Coral Coast", R.drawable.scene_tabarka_clean, arabicName = "طبرقة"),
-                TunisianPlace("place_ichkeul", "Ichkeul Lake", 0, "Ichkeul National Park", "A UNESCO World Heritage park where thousands of migrating birds spend the winter.", 0.48f, 0.09f, "boss_b5", "UNESCO Wetland", R.drawable.scene_ichkeul_clean, R.drawable.scene_ichkeul_toon, R.drawable.scene_ichkeul_dirty, "بحيرة إشكل")
+                TunisianPlace("place_hammamet", "Hammamet", 0, "Hammamet-Sud Beach", "Thousands of visitors come every summer: sorting waste keeps the sand clean.", 0.740f, 0.153f, "boss_b1", "Mediterranean Jasmine Coast", R.drawable.scene_hammamet_clean, R.drawable.scene_hammamet_toon, R.drawable.scene_hammamet_dirty, "الحمامات"),
+                TunisianPlace("place_djerba", "Djerba", 0, "Sidi Mahrez Beach", "Djerba is an island: litter left on the beach quickly reaches the sea and the sea turtles.", 0.813f, 0.500f, "boss_b2", "Island of Dreams", R.drawable.scene_djerba_clean, arabicName = "جربة"),
+                TunisianPlace("place_mahdia", "Mahdia", 0, "Cap Africa", "Mahdia lives from fishing: a lost net keeps trapping fish for years.", 0.840f, 0.273f, "boss_b3", "Turquoise Reef Peninsula", R.drawable.scene_mahdia_clean, arabicName = "المهدية"),
+                TunisianPlace("place_tabarka", "Tabarka", 0, "The Needles of Tabarka", "Red coral grows off Tabarka: a plastic bottle takes centuries to disappear.", 0.332f, 0.080f, "boss_b4", "Coral Coast", R.drawable.scene_tabarka_clean, arabicName = "طبرقة"),
+                TunisianPlace("place_ichkeul", "Ichkeul Lake", 0, "Ichkeul National Park", "A UNESCO World Heritage park where thousands of migrating birds spend the winter.", 0.532f, 0.052f, "boss_b5", "UNESCO Wetland", R.drawable.scene_ichkeul_clean, R.drawable.scene_ichkeul_toon, R.drawable.scene_ichkeul_dirty, "بحيرة إشكل")
             )
         ),
         ArenaDefinition(
@@ -168,11 +169,11 @@ object GameCatalog {
             primaryColor = SaharanAmber,
             secondaryColor = Color(0xFFD97706),
             places = listOf(
-                TunisianPlace("place_carthage", "Carthage", 1, "Antonine Baths", "A UNESCO site. A recycled can saves about 95% of the energy of a new one.", 0.55f, 0.15f, "boss_m1", "UNESCO Punic & Roman Ruins", R.drawable.scene_carthage_clean, R.drawable.scene_carthage_toon, R.drawable.scene_carthage_dirty, "قرطاج"),
-                TunisianPlace("place_el_jem", "El Jem", 1, "El Jem Amphitheatre", "The amphitheatre held 35,000 spectators: imagine their litter without sorting bins!", 0.62f, 0.44f, "boss_m2", "UNESCO Roman Amphitheatre", R.drawable.scene_eljem_clean, arabicName = "الجم"),
-                TunisianPlace("place_dougga", "Dougga", 1, "Capitol of Dougga", "The best-preserved Roman town in North Africa: keeping it clean keeps it alive.", 0.36f, 0.21f, "boss_m3", "UNESCO Hilltop Roman City", R.drawable.scene_dougga_clean, arabicName = "دقة"),
-                TunisianPlace("place_medina", "Medina of Tunis", 1, "Souks of the Medina", "Cardboard from the souks recycles easily if it is sorted and kept dry.", 0.52f, 0.17f, "boss_m4", "UNESCO Historic Medina", R.drawable.scene_medina_clean, arabicName = "مدينة تونس"),
-                TunisianPlace("place_sbeitla", "Sbeitla", 1, "Temples of Sufetula", "These temples are 1,800 years old. A plastic bag can last more than 400 years.", 0.33f, 0.40f, "boss_m5", "Roman Temples of Sufetula", R.drawable.scene_sbeitla_clean, arabicName = "سبيطلة")
+                TunisianPlace("place_carthage", "Carthage", 1, "Antonine Baths", "A UNESCO site. A recycled can saves about 95% of the energy of a new one.", 0.677f, 0.093f, "boss_m1", "UNESCO Punic & Roman Ruins", R.drawable.scene_carthage_clean, R.drawable.scene_carthage_toon, R.drawable.scene_carthage_dirty, "قرطاج"),
+                TunisianPlace("place_el_jem", "El Jem", 1, "El Jem Amphitheatre", "The amphitheatre held 35,000 spectators: imagine their litter without sorting bins!", 0.760f, 0.301f, "boss_m2", "UNESCO Roman Amphitheatre", R.drawable.scene_eljem_clean, arabicName = "الجم"),
+                TunisianPlace("place_dougga", "Dougga", 1, "Capitol of Dougga", "The best-preserved Roman town in North Africa: keeping it clean keeps it alive.", 0.433f, 0.151f, "boss_m3", "UNESCO Hilltop Roman City", R.drawable.scene_dougga_clean, arabicName = "دقة"),
+                TunisianPlace("place_medina", "Medina of Tunis", 1, "Souks of the Medina", "Cardboard from the souks recycles easily if it is sorted and kept dry.", 0.642f, 0.100f, "boss_m4", "UNESCO Historic Medina", R.drawable.scene_medina_clean, arabicName = "مدينة تونس"),
+                TunisianPlace("place_sbeitla", "Sbeitla", 1, "Temples of Sufetula", "These temples are 1,800 years old. A plastic bag can last more than 400 years.", 0.413f, 0.309f, "boss_m5", "Roman Temples of Sufetula", R.drawable.scene_sbeitla_clean, arabicName = "سبيطلة")
             )
         ),
         ArenaDefinition(
@@ -185,11 +186,11 @@ object GameCatalog {
             primaryColor = Color(0xFFEA580C),
             secondaryColor = EcoEmerald,
             places = listOf(
-                TunisianPlace("place_tozeur", "Tozeur", 2, "Tozeur Palm Grove", "Composted organic waste feeds the palm grove soil instead of polluting it.", 0.25f, 0.61f, "boss_d1", "Thousand-Palm Djerid Oasis", R.drawable.scene_tozeur_clean, R.drawable.scene_tozeur_toon, R.drawable.scene_tozeur_dirty, "توزر"),
-                TunisianPlace("place_douz", "Douz", 2, "Gateway to the Sahara", "Desert wind carries plastic bags very far: people call them \"desert flowers\".", 0.45f, 0.71f, "boss_d2", "Gateway to the Grand Erg", R.drawable.scene_douz_clean, arabicName = "دوز"),
-                TunisianPlace("place_chott_el_djerid", "Chott el-Djerid", 2, "Great Salt Lake", "The largest salt lake of the Sahara: its salt crust is as fragile as the desert.", 0.35f, 0.64f, "boss_d3", "Mirrored Saharan Salt Lake", R.drawable.scene_chott_clean, arabicName = "شط الجريد"),
-                TunisianPlace("place_matmata", "Matmata", 2, "Troglodyte Houses", "Houses dug into the earth: a village that has reused its soil for centuries.", 0.56f, 0.69f, "boss_d4", "Troglodyte Lunar Dwellings", R.drawable.scene_matmata_clean, arabicName = "مطماطة"),
-                TunisianPlace("place_tataouine", "Tataouine", 2, "Ksar Ouled Soltane", "The ksour were granaries: nothing was wasted, every reserve was precious.", 0.62f, 0.78f, "boss_d5", "Ksar Granaries", R.drawable.scene_tataouine_clean, arabicName = "تطاوين")
+                TunisianPlace("place_tozeur", "Tozeur", 2, "Tozeur Palm Grove", "Composted organic waste feeds the palm grove soil instead of polluting it.", 0.194f, 0.484f, "boss_d1", "Thousand-Palm Djerid Oasis", R.drawable.scene_tozeur_clean, R.drawable.scene_tozeur_toon, R.drawable.scene_tozeur_dirty, "توزر"),
+                TunisianPlace("place_douz", "Douz", 2, "Gateway to the Sahara", "Desert wind carries plastic bags very far: people call them \"desert flowers\".", 0.389f, 0.545f, "boss_d2", "Gateway to the Grand Erg", R.drawable.scene_douz_clean, arabicName = "دوز"),
+                TunisianPlace("place_chott_el_djerid", "Chott el-Djerid", 2, "Great Salt Lake", "The largest salt lake of the Sahara: its salt crust is as fragile as the desert.", 0.259f, 0.507f, "boss_d3", "Mirrored Saharan Salt Lake", R.drawable.scene_chott_clean, arabicName = "شط الجريد"),
+                TunisianPlace("place_matmata", "Matmata", 2, "Troglodyte Houses", "Houses dug into the earth: a village that has reused its soil for centuries.", 0.598f, 0.535f, "boss_d4", "Troglodyte Lunar Dwellings", R.drawable.scene_matmata_clean, arabicName = "مطماطة"),
+                TunisianPlace("place_tataouine", "Tataouine", 2, "Ksar Ouled Soltane", "The ksour were granaries: nothing was wasted, every reserve was precious.", 0.703f, 0.616f, "boss_d5", "Ksar Granaries", R.drawable.scene_tataouine_clean, arabicName = "تطاوين")
             )
         )
     )

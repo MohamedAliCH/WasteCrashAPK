@@ -256,17 +256,12 @@ fun SpectatorTheatreScreen(
                             .clip(RoundedCornerShape(18.dp))
                             .border(2.dp, if (viewingOpponent) CarthageCoral else EcoEmeraldBright, RoundedCornerShape(18.dp))
                     ) {
-                        Image(
-                            painter = painterResource(id = arena.bannerRes),
-                            contentDescription = place.name,
-                            contentScale = ContentScale.Crop,
+                        // Same living scene as in battle: the place cleans up as the replay advances
+                        com.example.ui.components.EnvironmentScene(
+                            place = place,
+                            pollution = 1f - activeRest / 100f,
+                            purified = activeRest >= 100,
                             modifier = Modifier.fillMaxSize()
-                        )
-                        val smogAlpha = (1f - activeRest / 100f).coerceIn(0f, 0.72f)
-                        Box(
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .background(Color(0xFF2B2620).copy(alpha = smogAlpha))
                         )
                         Row(
                             modifier = Modifier

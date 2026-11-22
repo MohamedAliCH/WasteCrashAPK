@@ -62,6 +62,7 @@ service cloud.firestore {
              isValidString(data.dailyQuestSeedDate, 8, 12) &&
              data.questProgress is map && data.questProgress.size() <= 30 &&
              data.questClaimed is map && data.questClaimed.size() <= 30 &&
+             (!('avatarId' in data) || isValidString(data.avatarId, 1, 40)) &&
              isValidTimestamp(data.createdAt) &&
              isValidTimestamp(data.updatedAt);
     }
@@ -189,7 +190,7 @@ service cloud.firestore {
                          'userId', 'displayName', 'friendCode', 'trophies', 'ecoCoins',
                          'wins', 'losses', 'equippedDeckIds', 'bossLevels', 'bossCopies',
                          'friendUids', 'dailyQuestSeedDate', 'questProgress', 'questClaimed',
-                         'createdAt', 'updatedAt'
+                         'avatarId', 'createdAt', 'updatedAt'
                        ]) &&
                        isValidUserProfile(incoming());
 
@@ -204,7 +205,7 @@ service cloud.firestore {
                        incoming().diff(existing()).affectedKeys().hasOnly([
                          'displayName', 'trophies', 'ecoCoins', 'wins', 'losses',
                          'equippedDeckIds', 'bossLevels', 'bossCopies', 'friendUids',
-                         'dailyQuestSeedDate', 'questProgress', 'questClaimed', 'updatedAt'
+                         'dailyQuestSeedDate', 'questProgress', 'questClaimed', 'avatarId', 'updatedAt'
                        ]);
 
       allow delete: if isSignedIn() && isValidId(userId) && request.auth.uid == userId;

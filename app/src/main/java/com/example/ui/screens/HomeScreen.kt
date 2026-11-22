@@ -27,6 +27,7 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.example.model.AvatarCatalog
 import com.example.model.GameCatalog
 import com.example.model.UserProfile
 import com.example.ui.components.*
@@ -43,8 +44,9 @@ fun HomeScreen(
     onOpenArenas: () -> Unit,
     onOpenAlbum: () -> Unit,
     onOpenQuests: () -> Unit,
-    onSignOut: () -> Unit,
-    onOpenSpectatorHub: () -> Unit = {}
+    onOpenProfile: () -> Unit,
+    onOpenSettings: () -> Unit,
+    hasNewAvatars: Boolean = false
 ) {
     val arena = GameCatalog.arenaForTrophies(profile.trophies)
     val nextThreshold = arena.nextArenaTrophies
@@ -72,19 +74,23 @@ fun HomeScreen(
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
             Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+                // Avatar: opens the profile side panel
                 Box(
                     modifier = Modifier
-                        .size(44.dp)
-                        .clip(CircleShape)
-                        .background(Brush.linearGradient(listOf(CeramicBlueTop, CeramicBlueBottom)))
-                        .border(2.5.dp, SaffronGold, CircleShape),
-                    contentAlignment = Alignment.Center
+                        .clickable(onClick = onOpenProfile)
+                        .testTag("home_avatar_button")
                 ) {
-                    Text(
-                        text = profile.displayName.take(1).uppercase(),
-                        style = MaterialTheme.typography.titleLarge,
-                        color = Color.White
-                    )
+                    AvatarPortrait(AvatarCatalog.displayedFor(profile), 48.dp)
+                    if (hasNewAvatars) {
+                        Box(
+                            modifier = Modifier
+                                .size(14.dp)
+                                .align(Alignment.TopEnd)
+                                .clip(CircleShape)
+                                .background(CarthageCoral)
+                                .border(2.dp, DarkBgPrimary, CircleShape)
+                        )
+                    }
                 }
                 Spacer(Modifier.width(10.dp))
                 Column {
@@ -104,14 +110,14 @@ fun HomeScreen(
             }
 
             IconButton(
-                onClick = onSignOut,
+                onClick = onOpenSettings,
                 modifier = Modifier
                     .size(48.dp)
-                    .testTag("sign_out_button")
+                    .testTag("home_settings_button")
             ) {
                 Icon(
-                    imageVector = Icons.AutoMirrored.Filled.Logout,
-                    contentDescription = "Sign out",
+                    imageVector = Icons.Default.Settings,
+                    contentDescription = "Settings",
                     tint = TextMutedOnDark
                 )
             }
@@ -395,32 +401,6 @@ fun HomeScreen(
                 modifier = Modifier.weight(1f),
                 tag = "home_quests_button"
             )
-        }
-
-        // Live TV & Replays (Spectator Hub)
-        Surface(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clickable(onClick = onOpenSpectatorHub)
-                .testTag("home_spectator_hub_button"),
-            shape = RoundedCornerShape(18.dp),
-            color = DarkSurfaceCard,
-            border = BorderStroke(2.dp, DarkBorderSubtle)
-        ) {
-            Row(
-                modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Icon(Icons.Default.LiveTv, contentDescription = null, tint = SidiSkyLight)
-                Spacer(Modifier.width(10.dp))
-                Text(
-                    "Live TV & Replays",
-                    style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.ExtraBold),
-                    color = TextOnDark,
-                    modifier = Modifier.weight(1f)
-                )
-                Icon(Icons.Default.ChevronRight, contentDescription = null, tint = TextMutedOnDark)
-            }
         }
 
         // 5. Equipped 3-Slot Eco-Deck Showcase Strip with Real Boss Sprites
